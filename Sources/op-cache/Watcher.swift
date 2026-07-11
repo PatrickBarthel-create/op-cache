@@ -38,7 +38,7 @@ enum Watcher {
             let result = BatchCleanup.run(items: profiles) { profile in
                 try keychain.clear(profile: profile)
             }
-            log(result.succeeded.isEmpty
+            log(profiles.isEmpty
                 ? "Nothing cached to clear on \(trigger)."
                 : "Cleared \(result.succeeded.joined(separator: ", ")) on \(trigger).")
             if !result.failed.isEmpty {
