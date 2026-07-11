@@ -1,5 +1,8 @@
 # op-cache
 
+[Open the visual guide](./op-cache-guide.html) for a graphical explanation of
+the unlock flow, Keychain boundary, cache lifecycle, and command interface.
+
 `op-cache` lets a local coding agent use a small, explicit set of 1Password
 secrets for a short period without asking for Touch ID on every command.
 

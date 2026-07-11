@@ -1,0 +1,1032 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="A visual guide to op-cache: one 1Password approval, scoped Keychain-backed secrets, and an eight-hour working window for local agents.">
+  <title>op-cache · Visual Guide</title>
+  <style>
+    :root {
+      --ink: #17211d;
+      --muted: #647069;
+      --paper: #f5f2e9;
+      --paper-2: #ece7db;
+      --surface: rgba(255, 255, 255, 0.66);
+      --line: rgba(23, 33, 29, 0.14);
+      --green: #1f9d70;
+      --green-dark: #0b6549;
+      --green-pale: #d8f3e8;
+      --amber: #f2a93b;
+      --night: #101a17;
+      --night-2: #17251f;
+      --white: #fffef8;
+      --shadow: 0 22px 60px rgba(31, 48, 41, 0.13);
+      --radius-lg: 32px;
+      --radius-md: 22px;
+      --radius-sm: 14px;
+    }
+
+    * { box-sizing: border-box; }
+
+    html {
+      scroll-behavior: smooth;
+      background: var(--paper);
+    }
+
+    body {
+      margin: 0;
+      color: var(--ink);
+      font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background:
+        radial-gradient(circle at 8% 5%, rgba(31, 157, 112, 0.16), transparent 25rem),
+        radial-gradient(circle at 92% 24%, rgba(242, 169, 59, 0.13), transparent 22rem),
+        var(--paper);
+      line-height: 1.55;
+      overflow-x: hidden;
+    }
+
+    a { color: inherit; }
+
+    button, a { -webkit-tap-highlight-color: transparent; }
+
+    .shell {
+      width: min(1180px, calc(100% - 40px));
+      margin: 0 auto;
+    }
+
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 30;
+      padding: 14px 0;
+      background: rgba(245, 242, 233, 0.78);
+      backdrop-filter: blur(18px);
+      border-bottom: 1px solid rgba(23, 33, 29, 0.08);
+    }
+
+    .topbar-inner {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 24px;
+    }
+
+    .brand {
+      display: inline-flex;
+      align-items: center;
+      gap: 11px;
+      font-weight: 800;
+      letter-spacing: -0.03em;
+    }
+
+    .brand-mark {
+      display: grid;
+      place-items: center;
+      width: 34px;
+      height: 34px;
+      border-radius: 10px;
+      color: var(--white);
+      background: var(--night);
+      box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.1);
+    }
+
+    .brand-mark svg { width: 18px; height: 18px; }
+
+    .nav {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--muted);
+      font-size: 0.9rem;
+    }
+
+    .nav a {
+      padding: 8px 11px;
+      border-radius: 999px;
+      text-decoration: none;
+      transition: background 180ms ease, color 180ms ease;
+    }
+
+    .nav a:hover, .nav a:focus-visible {
+      color: var(--ink);
+      background: rgba(255, 255, 255, 0.72);
+      outline: none;
+    }
+
+    .status-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 7px 12px;
+      border: 1px solid rgba(31, 157, 112, 0.22);
+      border-radius: 999px;
+      color: var(--green-dark);
+      background: rgba(216, 243, 232, 0.68);
+      font-size: 0.8rem;
+      font-weight: 750;
+    }
+
+    .pulse-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--green);
+      box-shadow: 0 0 0 0 rgba(31, 157, 112, 0.42);
+      animation: pulse 2.2s infinite;
+    }
+
+    .hero {
+      min-height: 710px;
+      display: grid;
+      grid-template-columns: 0.95fr 1.05fr;
+      align-items: center;
+      gap: clamp(42px, 7vw, 96px);
+      padding: 82px 0 88px;
+    }
+
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 22px;
+      color: var(--green-dark);
+      font-size: 0.82rem;
+      font-weight: 800;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+    }
+
+    .eyebrow::before {
+      content: "";
+      width: 28px;
+      height: 2px;
+      background: var(--green);
+    }
+
+    h1, h2, h3, p { margin-top: 0; }
+
+    h1 {
+      max-width: 720px;
+      margin-bottom: 25px;
+      font-size: clamp(3.3rem, 7vw, 6.7rem);
+      line-height: 0.9;
+      letter-spacing: -0.075em;
+      text-wrap: balance;
+    }
+
+    .hero h1 span {
+      display: block;
+      color: var(--green);
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 0.48em;
+      letter-spacing: -0.045em;
+      line-height: 1.35;
+    }
+
+    .hero-copy > p {
+      max-width: 620px;
+      margin-bottom: 30px;
+      color: var(--muted);
+      font-size: clamp(1.05rem, 2vw, 1.25rem);
+    }
+
+    .hero-actions {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      min-height: 48px;
+      padding: 0 20px;
+      border: 1px solid transparent;
+      border-radius: 999px;
+      font: inherit;
+      font-weight: 750;
+      text-decoration: none;
+      cursor: pointer;
+      transition: transform 180ms ease, box-shadow 180ms ease, background 180ms ease;
+    }
+
+    .button:hover { transform: translateY(-2px); }
+
+    .button-primary {
+      color: var(--white);
+      background: var(--night);
+      box-shadow: 0 12px 30px rgba(16, 26, 23, 0.2);
+    }
+
+    .button-secondary {
+      border-color: var(--line);
+      color: var(--ink);
+      background: rgba(255, 255, 255, 0.6);
+    }
+
+    .hero-visual {
+      position: relative;
+      min-height: 560px;
+      display: grid;
+      place-items: center;
+    }
+
+    .orbit {
+      position: absolute;
+      width: min(540px, 100%);
+      aspect-ratio: 1;
+      border: 1px dashed rgba(31, 157, 112, 0.35);
+      border-radius: 50%;
+      animation: rotate 34s linear infinite;
+    }
+
+    .orbit::before, .orbit::after {
+      content: "";
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      border-radius: 50%;
+      transform: translate(-50%, -50%);
+    }
+
+    .orbit::before {
+      width: 72%;
+      height: 72%;
+      border: 1px solid rgba(23, 33, 29, 0.08);
+    }
+
+    .orbit::after {
+      width: 12px;
+      height: 12px;
+      margin-left: 50%;
+      background: var(--amber);
+      box-shadow: 0 0 0 8px rgba(242, 169, 59, 0.14);
+    }
+
+    .terminal {
+      position: relative;
+      z-index: 3;
+      width: min(490px, 100%);
+      overflow: hidden;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 26px;
+      color: #dff8ed;
+      background: linear-gradient(145deg, #14231d, #0b1210);
+      box-shadow: 0 38px 85px rgba(16, 26, 23, 0.28);
+      transform: rotate(-2deg);
+    }
+
+    .terminal-bar {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      height: 47px;
+      padding: 0 17px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+      background: rgba(255, 255, 255, 0.035);
+    }
+
+    .terminal-dot { width: 9px; height: 9px; border-radius: 50%; }
+    .terminal-dot:nth-child(1) { background: #ff6f61; }
+    .terminal-dot:nth-child(2) { background: #ffc857; }
+    .terminal-dot:nth-child(3) { background: #42d392; }
+
+    .terminal-title {
+      margin-left: auto;
+      color: rgba(255, 255, 255, 0.4);
+      font: 0.72rem ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+
+    .terminal-body {
+      min-height: 325px;
+      padding: 28px 25px 30px;
+      font: 0.9rem/1.8 ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+
+    .prompt { color: #72e2b9; }
+    .terminal-muted { color: #78958a; }
+    .terminal-strong { color: #fff4c8; }
+
+    .terminal-success {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      margin-top: 18px;
+      padding: 6px 10px;
+      border-radius: 8px;
+      color: #8ff0cb;
+      background: rgba(31, 157, 112, 0.14);
+    }
+
+    .float-card {
+      position: absolute;
+      z-index: 5;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 13px 15px;
+      border: 1px solid rgba(255, 255, 255, 0.7);
+      border-radius: 16px;
+      background: rgba(255, 255, 255, 0.82);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(15px);
+      font-weight: 760;
+      animation: float 5s ease-in-out infinite;
+    }
+
+    .float-card svg { width: 21px; height: 21px; color: var(--green-dark); }
+    .float-card small { display: block; color: var(--muted); font-weight: 600; }
+    .float-one { top: 34px; right: -16px; }
+    .float-two { bottom: 40px; left: -16px; animation-delay: -2.2s; }
+
+    .metric-strip {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 1px;
+      overflow: hidden;
+      margin-bottom: 130px;
+      border: 1px solid var(--line);
+      border-radius: 24px;
+      background: var(--line);
+      box-shadow: var(--shadow);
+    }
+
+    .metric {
+      padding: 28px 30px;
+      background: rgba(255, 255, 255, 0.7);
+    }
+
+    .metric strong {
+      display: block;
+      margin-bottom: 2px;
+      font-size: clamp(1.8rem, 4vw, 3.2rem);
+      letter-spacing: -0.06em;
+    }
+
+    .metric span { color: var(--muted); font-size: 0.92rem; }
+
+    section { scroll-margin-top: 90px; }
+
+    .section {
+      padding: 0 0 140px;
+    }
+
+    .section-heading {
+      display: grid;
+      grid-template-columns: 0.85fr 1.15fr;
+      gap: 50px;
+      align-items: end;
+      margin-bottom: 55px;
+    }
+
+    .section-heading h2 {
+      margin-bottom: 0;
+      font-size: clamp(2.5rem, 5vw, 4.5rem);
+      line-height: 0.98;
+      letter-spacing: -0.065em;
+    }
+
+    .section-heading p {
+      max-width: 580px;
+      margin: 0;
+      color: var(--muted);
+      font-size: 1.08rem;
+    }
+
+    .flow-board {
+      position: relative;
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 18px;
+      padding: 28px;
+      overflow: hidden;
+      border-radius: var(--radius-lg);
+      color: var(--white);
+      background:
+        linear-gradient(rgba(255,255,255,0.025) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,0.025) 1px, transparent 1px),
+        linear-gradient(145deg, var(--night-2), var(--night));
+      background-size: 34px 34px, 34px 34px, auto;
+      box-shadow: var(--shadow);
+    }
+
+    .flow-line {
+      position: absolute;
+      top: 89px;
+      left: 12%;
+      right: 12%;
+      height: 2px;
+      background: linear-gradient(90deg, transparent, var(--green), var(--amber), var(--green), transparent);
+      opacity: 0.55;
+    }
+
+    .flow-line::after {
+      content: "";
+      position: absolute;
+      top: -3px;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #c2ffe6;
+      box-shadow: 0 0 18px #6ee7b7;
+      animation: travel 4.5s linear infinite;
+    }
+
+    .flow-card {
+      position: relative;
+      z-index: 2;
+      min-height: 245px;
+      padding: 22px;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 20px;
+      background: rgba(255, 255, 255, 0.055);
+      backdrop-filter: blur(10px);
+      transition: transform 220ms ease, background 220ms ease;
+    }
+
+    .flow-card:hover {
+      transform: translateY(-6px);
+      background: rgba(255, 255, 255, 0.085);
+    }
+
+    .flow-icon {
+      display: grid;
+      place-items: center;
+      width: 52px;
+      height: 52px;
+      margin-bottom: 28px;
+      border-radius: 16px;
+      color: #8ff0cb;
+      background: rgba(31, 157, 112, 0.16);
+      box-shadow: inset 0 0 0 1px rgba(143, 240, 203, 0.13);
+    }
+
+    .flow-icon svg { width: 25px; height: 25px; }
+
+    .flow-step {
+      position: absolute;
+      top: 18px;
+      right: 18px;
+      color: rgba(255, 255, 255, 0.3);
+      font: 0.75rem ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+
+    .flow-card h3 { margin-bottom: 8px; font-size: 1.08rem; }
+    .flow-card p { margin: 0; color: #9eb1a9; font-size: 0.9rem; }
+
+    .boundary-grid {
+      display: grid;
+      grid-template-columns: 1.05fr 0.95fr;
+      gap: 26px;
+    }
+
+    .boundary-graphic, .principles {
+      border: 1px solid var(--line);
+      border-radius: var(--radius-lg);
+      background: var(--surface);
+      box-shadow: var(--shadow);
+    }
+
+    .boundary-graphic {
+      position: relative;
+      min-height: 530px;
+      display: grid;
+      place-items: center;
+      overflow: hidden;
+      padding: 35px;
+    }
+
+    .ring {
+      position: absolute;
+      display: grid;
+      place-items: center;
+      border-radius: 50%;
+    }
+
+    .ring-outer {
+      width: min(440px, 84%);
+      aspect-ratio: 1;
+      border: 1px dashed rgba(23, 33, 29, 0.22);
+      background: rgba(255, 255, 255, 0.26);
+    }
+
+    .ring-middle {
+      width: 68%;
+      aspect-ratio: 1;
+      border: 1px solid rgba(31, 157, 112, 0.26);
+      background: rgba(216, 243, 232, 0.66);
+      box-shadow: 0 0 0 14px rgba(31, 157, 112, 0.035);
+    }
+
+    .ring-inner {
+      width: 52%;
+      aspect-ratio: 1;
+      color: var(--white);
+      background: var(--night);
+      box-shadow: 0 22px 55px rgba(16, 26, 23, 0.22);
+      text-align: center;
+    }
+
+    .ring-inner svg { width: 42px; height: 42px; margin-bottom: 8px; color: #8ff0cb; }
+    .ring-inner strong { display: block; font-size: 1.05rem; }
+    .ring-inner span { color: #8da49a; font-size: 0.78rem; }
+
+    .ring-label {
+      position: absolute;
+      padding: 8px 11px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: rgba(255,255,255,0.86);
+      box-shadow: 0 8px 22px rgba(23,33,29,0.08);
+      font-size: 0.78rem;
+      font-weight: 760;
+    }
+
+    .label-account { top: 48px; left: 50%; transform: translateX(-50%); }
+    .label-allowlist { bottom: 76px; left: 55px; }
+    .label-child { right: 42px; bottom: 126px; }
+
+    .principles {
+      padding: 34px;
+    }
+
+    .principles h3 {
+      margin-bottom: 26px;
+      font-size: 1.55rem;
+      letter-spacing: -0.04em;
+    }
+
+    .principle {
+      display: grid;
+      grid-template-columns: 42px 1fr;
+      gap: 15px;
+      padding: 18px 0;
+      border-top: 1px solid var(--line);
+    }
+
+    .principle:first-of-type { border-top: 0; padding-top: 0; }
+
+    .principle-number {
+      display: grid;
+      place-items: center;
+      width: 36px;
+      height: 36px;
+      border-radius: 12px;
+      color: var(--green-dark);
+      background: var(--green-pale);
+      font: 700 0.78rem ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+
+    .principle strong { display: block; margin-bottom: 4px; }
+    .principle p { margin: 0; color: var(--muted); font-size: 0.9rem; }
+
+    .warning {
+      margin-top: 24px;
+      padding: 16px 18px;
+      border: 1px solid rgba(242, 169, 59, 0.26);
+      border-radius: 15px;
+      color: #795316;
+      background: rgba(255, 239, 204, 0.68);
+      font-size: 0.88rem;
+    }
+
+    .lifecycle {
+      position: relative;
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 18px;
+    }
+
+    .lifecycle::before {
+      content: "";
+      position: absolute;
+      top: 28px;
+      left: 10%;
+      right: 10%;
+      height: 2px;
+      background: var(--line);
+    }
+
+    .life-step { position: relative; z-index: 2; }
+
+    .life-dot {
+      display: grid;
+      place-items: center;
+      width: 56px;
+      height: 56px;
+      margin-bottom: 22px;
+      border: 7px solid var(--paper);
+      border-radius: 50%;
+      color: var(--white);
+      background: var(--night);
+      box-shadow: 0 0 0 1px var(--line);
+      font: 800 0.8rem ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+
+    .life-step:nth-child(2) .life-dot,
+    .life-step:nth-child(3) .life-dot { background: var(--green); }
+    .life-step:nth-child(4) .life-dot { background: var(--amber); }
+
+    .life-step h3 { margin-bottom: 6px; font-size: 1rem; }
+    .life-step p { color: var(--muted); font-size: 0.88rem; }
+
+    .commands-wrap {
+      overflow: hidden;
+      border-radius: var(--radius-lg);
+      color: var(--white);
+      background: var(--night);
+      box-shadow: var(--shadow);
+    }
+
+    .commands-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 20px;
+      padding: 23px 26px;
+      border-bottom: 1px solid rgba(255,255,255,0.08);
+    }
+
+    .commands-header span { color: #849b91; font-size: 0.88rem; }
+
+    .command-list { display: grid; }
+
+    .command-row {
+      display: grid;
+      grid-template-columns: 160px 1fr auto;
+      gap: 18px;
+      align-items: center;
+      min-height: 88px;
+      padding: 17px 25px;
+      border-top: 1px solid rgba(255,255,255,0.07);
+    }
+
+    .command-row:first-child { border-top: 0; }
+
+    .command-label {
+      color: #8ff0cb;
+      font-size: 0.78rem;
+      font-weight: 780;
+      letter-spacing: 0.09em;
+      text-transform: uppercase;
+    }
+
+    code {
+      color: #eefcf6;
+      font: 0.86rem/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
+      overflow-wrap: anywhere;
+    }
+
+    .copy-button {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      padding: 8px 10px;
+      border: 1px solid rgba(255,255,255,0.12);
+      border-radius: 10px;
+      color: #aac0b7;
+      background: rgba(255,255,255,0.055);
+      font: inherit;
+      font-size: 0.75rem;
+      font-weight: 700;
+      cursor: pointer;
+      transition: color 180ms ease, background 180ms ease;
+    }
+
+    .copy-button:hover, .copy-button:focus-visible {
+      color: var(--white);
+      background: rgba(255,255,255,0.1);
+      outline: none;
+    }
+
+    .copy-button svg { width: 15px; height: 15px; }
+
+    .footer {
+      padding: 35px 0 50px;
+      border-top: 1px solid var(--line);
+    }
+
+    .footer-inner {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 25px;
+      color: var(--muted);
+      font-size: 0.85rem;
+    }
+
+    .footer strong { color: var(--ink); }
+
+    .reveal {
+      opacity: 0;
+      transform: translateY(24px);
+      transition: opacity 700ms ease, transform 700ms cubic-bezier(.2,.8,.2,1);
+    }
+
+    .reveal.visible { opacity: 1; transform: translateY(0); }
+
+    @keyframes pulse {
+      70% { box-shadow: 0 0 0 9px rgba(31, 157, 112, 0); }
+      100% { box-shadow: 0 0 0 0 rgba(31, 157, 112, 0); }
+    }
+
+    @keyframes rotate { to { transform: rotate(360deg); } }
+
+    @keyframes float {
+      0%, 100% { transform: translateY(0); }
+      50% { transform: translateY(-10px); }
+    }
+
+    @keyframes travel {
+      from { left: 0; }
+      to { left: 100%; }
+    }
+
+    @media (max-width: 980px) {
+      .hero { grid-template-columns: 1fr; padding-top: 65px; }
+      .hero-copy { max-width: 780px; }
+      .hero-visual { min-height: 520px; }
+      .flow-board { grid-template-columns: repeat(2, 1fr); }
+      .flow-line { display: none; }
+      .boundary-grid { grid-template-columns: 1fr; }
+      .section-heading { grid-template-columns: 1fr; gap: 20px; }
+    }
+
+    @media (max-width: 720px) {
+      .shell { width: min(100% - 26px, 1180px); }
+      .nav { display: none; }
+      .status-pill { font-size: 0; padding: 9px; }
+      .hero { min-height: auto; padding: 52px 0 72px; }
+      .hero-visual { min-height: 450px; }
+      .terminal { transform: none; }
+      .terminal-body { min-height: 300px; padding: 22px 18px; font-size: 0.77rem; }
+      .float-one { top: 4px; right: -5px; }
+      .float-two { bottom: 4px; left: -4px; }
+      .float-card { padding: 10px 12px; font-size: 0.8rem; }
+      .metric-strip { grid-template-columns: 1fr; margin-bottom: 100px; }
+      .metric { padding: 22px; }
+      .section { padding-bottom: 105px; }
+      .flow-board { grid-template-columns: 1fr; padding: 16px; }
+      .flow-card { min-height: auto; }
+      .boundary-graphic { min-height: 440px; padding: 15px; }
+      .label-allowlist { left: 15px; bottom: 60px; }
+      .label-child { right: 10px; bottom: 110px; }
+      .lifecycle { grid-template-columns: 1fr; gap: 7px; }
+      .lifecycle::before { top: 0; bottom: 0; left: 28px; right: auto; width: 2px; height: auto; }
+      .life-step { display: grid; grid-template-columns: 65px 1fr; }
+      .life-dot { grid-row: 1 / 3; }
+      .command-row { grid-template-columns: 1fr auto; gap: 8px; padding: 18px; }
+      .command-label { grid-column: 1 / -1; }
+      .footer-inner { align-items: flex-start; flex-direction: column; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        scroll-behavior: auto !important;
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+      }
+      .reveal { opacity: 1; transform: none; }
+    }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="shell topbar-inner">
+      <div class="brand" aria-label="op-cache home">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="10" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/><circle cx="12" cy="16" r="1"/></svg>
+        </span>
+        <span>op-cache</span>
+      </div>
+      <nav class="nav" aria-label="Guide sections">
+        <a href="#flow">How it works</a>
+        <a href="#security">Security</a>
+        <a href="#commands">Commands</a>
+      </nav>
+      <span class="status-pill"><span class="pulse-dot"></span><span>Local · Keychain-backed</span></span>
+    </div>
+  </header>
+
+  <main>
+    <div class="shell">
+      <section class="hero" aria-labelledby="hero-title">
+        <div class="hero-copy reveal visible">
+          <div class="eyebrow">Visual system guide</div>
+          <h1 id="hero-title">One approval.<br>Hours of flow.<span>secrets, without the friction</span></h1>
+          <p>op-cache lets local coding agents use a reviewed set of 1Password secrets without asking for Touch ID on every command. You approve once, the allowlist is cached for eight hours, and each child process receives only what it needs.</p>
+          <div class="hero-actions">
+            <a class="button button-primary" href="#flow">See the data flow
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+            </a>
+            <a class="button button-secondary" href="#commands">Open command map</a>
+          </div>
+        </div>
+
+        <div class="hero-visual reveal visible" aria-label="Terminal visualization of an op-cache unlock">
+          <div class="orbit" aria-hidden="true"></div>
+          <div class="float-card float-one">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 13c0 5-3.5 7.5-8 9-4.5-1.5-8-4-8-9V5l8-3 8 3z"/><path d="m9 12 2 2 4-4"/></svg>
+            <div>Allowlisted only<small>Nothing else is fetched</small></div>
+          </div>
+          <div class="terminal">
+            <div class="terminal-bar">
+              <span class="terminal-dot"></span><span class="terminal-dot"></span><span class="terminal-dot"></span>
+              <span class="terminal-title">private · zsh</span>
+            </div>
+            <div class="terminal-body">
+              <div><span class="prompt">❯</span> op-cache unlock private</div>
+              <div class="terminal-muted">Authenticate 1Password once…</div>
+              <div class="terminal-strong">Touch ID approved ✓</div>
+              <br>
+              <div><span class="prompt">❯</span> op-cache run private &bsol;</div>
+              <div>&nbsp;&nbsp;--only CLOUDFLARE_API_TOKEN &bsol;</div>
+              <div>&nbsp;&nbsp;-- wrangler whoami</div>
+              <div class="terminal-success">✓ Authenticated · other secrets stripped</div>
+            </div>
+          </div>
+          <div class="float-card float-two">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+            <div>8-hour window<small>Or until sleep / clear</small></div>
+          </div>
+        </div>
+      </section>
+
+      <div class="metric-strip reveal" aria-label="Core properties">
+        <div class="metric"><strong>1×</strong><span>user approval per unlock window</span></div>
+        <div class="metric"><strong>8h</strong><span>default local authorization window</span></div>
+        <div class="metric"><strong>0</strong><span>plaintext secret files written to disk</span></div>
+      </div>
+
+      <section class="section" id="flow" aria-labelledby="flow-title">
+        <div class="section-heading reveal">
+          <div>
+            <div class="eyebrow">The data flow</div>
+            <h2 id="flow-title">Four controlled hops.</h2>
+          </div>
+          <p>op-cache is not a replacement or alias for <code style="color:var(--green-dark)">op</code>. It is a narrow bridge between one authenticated 1Password session and specifically scoped local commands.</p>
+        </div>
+
+        <div class="flow-board reveal">
+          <div class="flow-line" aria-hidden="true"></div>
+          <article class="flow-card">
+            <span class="flow-step">01</span>
+            <div class="flow-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10"/><path d="m9 12 2 2 4-4"/></svg></div>
+            <h3>Approve once</h3>
+            <p><code>op signin</code> uses the desktop integration. One Touch ID approval opens the requested profile.</p>
+          </article>
+          <article class="flow-card">
+            <span class="flow-step">02</span>
+            <div class="flow-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h7"/><circle cx="18" cy="18" r="3"/></svg></div>
+            <h3>Fetch allowlist</h3>
+            <p>Only fixed <code>op://</code> references in the selected profile are read. No arbitrary vault browsing.</p>
+          </article>
+          <article class="flow-card">
+            <span class="flow-step">03</span>
+            <div class="flow-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="10" width="18" height="11" rx="2"/><path d="M7 10V7a5 5 0 0 1 10 0v3"/><path d="M12 15v2"/></svg></div>
+            <h3>Cache in Keychain</h3>
+            <p>Values, account binding, references, and expiry live in macOS Keychain, encrypted at rest.</p>
+          </article>
+          <article class="flow-card">
+            <span class="flow-step">04</span>
+            <div class="flow-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m8 9-5 3 5 3M16 9l5 3-5 3M14 4l-4 16"/></svg></div>
+            <h3>Inject narrowly</h3>
+            <p><code>--only</code> strips every other configured secret before starting the child command.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="section" id="security" aria-labelledby="security-title">
+        <div class="section-heading reveal">
+          <div>
+            <div class="eyebrow">Security boundary</div>
+            <h2 id="security-title">Convenience, with a hard edge.</h2>
+          </div>
+          <p>The design intentionally trades repeated biometric approval for temporary, scoped local access. The scope is the allowlist, the account, the profile, and the expiry timestamp together.</p>
+        </div>
+
+        <div class="boundary-grid">
+          <div class="boundary-graphic reveal" aria-label="Nested security boundary diagram">
+            <div class="ring ring-outer">
+              <span class="ring-label label-account">1Password account</span>
+              <div class="ring ring-middle">
+                <span class="ring-label label-allowlist">Profile allowlist</span>
+                <span class="ring-label label-child">Selected child env</span>
+                <div class="ring ring-inner">
+                  <div>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M20 13c0 5-3.5 7.5-8 9-4.5-1.5-8-4-8-9V5l8-3 8 3z"/><path d="m9 12 2 2 4-4"/></svg>
+                    <strong>Target command</strong>
+                    <span>only requested names</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="principles reveal">
+            <h3>What keeps the boundary honest</h3>
+            <div class="principle">
+              <span class="principle-number">01</span>
+              <div><strong>Account-bound cache</strong><p>Changing from private to Everlast invalidates old entries, even when a reference name looks identical.</p></div>
+            </div>
+            <div class="principle">
+              <span class="principle-number">02</span>
+              <div><strong>Strict parsing</strong><p>A typo such as <code style="color:var(--green-dark)">--onyl</code> fails closed instead of silently injecting the full profile.</p></div>
+            </div>
+            <div class="principle">
+              <span class="principle-number">03</span>
+              <div><strong>Environment scrubbing</strong><p>Configured secret names inherited from the parent shell are removed before selected values are injected.</p></div>
+            </div>
+            <div class="principle">
+              <span class="principle-number">04</span>
+              <div><strong>Automatic cleanup</strong><p>Expiry rejects stale values. The watcher clears every cached profile when the Mac sleeps.</p></div>
+            </div>
+            <div class="warning"><strong>Important:</strong> during the unlock window, any process acting with your macOS user authority can execute op-cache for allowlisted secrets. Keep the list narrow and use scoped development tokens.</div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" aria-labelledby="life-title">
+        <div class="section-heading reveal">
+          <div>
+            <div class="eyebrow">Cache lifecycle</div>
+            <h2 id="life-title">Useful, then gone.</h2>
+          </div>
+          <p>The cache is a temporary working window, not a second permanent password manager. Every path eventually returns to a locked state.</p>
+        </div>
+
+        <div class="lifecycle reveal">
+          <article class="life-step"><div class="life-dot">T+0</div><h3>Unlock</h3><p>Approve Touch ID and fetch the profile allowlist.</p></article>
+          <article class="life-step"><div class="life-dot">RUN</div><h3>Work</h3><p>Run many scoped commands with no additional prompt.</p></article>
+          <article class="life-step"><div class="life-dot">8H</div><h3>Expire</h3><p>Entries fail closed after the configured window.</p></article>
+          <article class="life-step"><div class="life-dot">ZZZ</div><h3>Sleep / clear</h3><p>The watcher or a manual clear removes every cached value.</p></article>
+        </div>
+      </section>
+
+      <section class="section" id="commands" aria-labelledby="commands-title">
+        <div class="section-heading reveal">
+          <div>
+            <div class="eyebrow">Command map</div>
+            <h2 id="commands-title">The whole interface.</h2>
+          </div>
+          <p>Agents normally need only <strong>status</strong> and <strong>run</strong>. A human performs <strong>unlock</strong> when the window is closed.</p>
+        </div>
+
+        <div class="commands-wrap reveal">
+          <div class="commands-header"><strong>op-cache quick reference</strong><span>Click any row to copy</span></div>
+          <div class="command-list">
+            <div class="command-row"><span class="command-label">Unlock private</span><code>op-cache unlock private</code><button class="copy-button" type="button" aria-label="Copy unlock private command"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg><span>Copy</span></button></div>
+            <div class="command-row"><span class="command-label">Check status</span><code>op-cache status private</code><button class="copy-button" type="button" aria-label="Copy status command"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg><span>Copy</span></button></div>
+            <div class="command-row"><span class="command-label">Scoped run</span><code>op-cache run private --only CLOUDFLARE_API_TOKEN -- wrangler whoami</code><button class="copy-button" type="button" aria-label="Copy scoped run command"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg><span>Copy</span></button></div>
+            <div class="command-row"><span class="command-label">Clear now</span><code>op-cache clear private</code><button class="copy-button" type="button" aria-label="Copy clear command"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg><span>Copy</span></button></div>
+            <div class="command-row"><span class="command-label">Everlast</span><code>op-cache unlock everlast</code><button class="copy-button" type="button" aria-label="Copy Everlast unlock command"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg><span>Copy</span></button></div>
+          </div>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <footer class="footer">
+    <div class="shell footer-inner">
+      <div><strong>op-cache</strong> · local, scoped, temporary secret access</div>
+      <div>1Password remains the source of truth.</div>
+    </div>
+  </footer>
+
+  <script>
+    const revealObserver = new IntersectionObserver((entries) => {
+      for (const entry of entries) {
+        if (entry.isIntersecting) {
+          entry.target.classList.add('visible');
+          revealObserver.unobserve(entry.target);
+        }
+      }
+    }, { threshold: 0.12 });
+
+    document.querySelectorAll('.reveal:not(.visible)').forEach((element) => revealObserver.observe(element));
+
+    document.querySelectorAll('.copy-button').forEach((button) => {
+      button.addEventListener('click', async () => {
+        const code = button.parentElement.querySelector('code').textContent;
+        const label = button.querySelector('span');
+        try {
+          await navigator.clipboard.writeText(code);
+          label.textContent = 'Copied';
+          setTimeout(() => { label.textContent = 'Copy'; }, 1400);
+        } catch {
+          label.textContent = 'Select';
+          const selection = window.getSelection();
+          const range = document.createRange();
+          range.selectNodeContents(button.parentElement.querySelector('code'));
+          selection.removeAllRanges();
+          selection.addRange(range);
+        }
+      });
+    });
+  </script>
+</body>
+</html>
