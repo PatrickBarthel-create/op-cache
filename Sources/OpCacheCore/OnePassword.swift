@@ -1,5 +1,22 @@
 import Foundation
 
+private final class DataCollector: @unchecked Sendable {
+    private let lock = NSLock()
+    private var data = Data()
+
+    func store(_ value: Data) {
+        lock.lock()
+        data = value
+        lock.unlock()
+    }
+
+    func load() -> Data {
+        lock.lock()
+        defer { lock.unlock() }
+        return data
+    }
+}
+
 public struct OnePassword: Sendable {
     public let executableURL: URL
 
@@ -30,13 +47,30 @@ public struct OnePassword: Sendable {
 
         do {
             try process.run()
-            process.waitUntilExit()
         } catch {
             throw OpCacheError.message("Could not run 1Password CLI: \(error.localizedDescription)")
         }
 
-        let outputData = stdout.fileHandleForReading.readDataToEndOfFile()
-        let errorData = stderr.fileHandleForReading.readDataToEndOfFile()
+        let group = DispatchGroup()
+        let outputCollector = DataCollector()
+        let errorCollector = DataCollector()
+
+        group.enter()
+        DispatchQueue.global().async {
+            outputCollector.store(stdout.fileHandleForReading.readDataToEndOfFile())
+            group.leave()
+        }
+        group.enter()
+        DispatchQueue.global().async {
+            errorCollector.store(stderr.fileHandleForReading.readDataToEndOfFile())
+            group.leave()
+        }
+
+        process.waitUntilExit()
+        group.wait()
+
+        let outputData = outputCollector.load()
+        let errorData = errorCollector.load()
         guard process.terminationStatus == 0 else {
             let message = String(decoding: errorData, as: UTF8.self)
                 .trimmingCharacters(in: .whitespacesAndNewlines)

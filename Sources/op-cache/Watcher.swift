@@ -35,12 +35,18 @@ enum Watcher {
         do {
             let keychain = KeychainStore()
             let profiles = try keychain.allProfiles()
-            for profile in profiles {
+            let result = BatchCleanup.run(items: profiles) { profile in
                 try keychain.clear(profile: profile)
             }
-            log(profiles.isEmpty
+            log(result.succeeded.isEmpty
                 ? "Nothing cached to clear on \(trigger)."
-                : "Cleared \(profiles.joined(separator: ", ")) on \(trigger).")
+                : "Cleared \(result.succeeded.joined(separator: ", ")) on \(trigger).")
+            if !result.failed.isEmpty {
+                let failures = result.failed
+                    .map { "\($0.item): \($0.message)" }
+                    .joined(separator: "; ")
+                log("ERROR: some profiles could not be cleared on \(trigger): \(failures)")
+            }
         } catch {
             log("ERROR: could not clear cache on \(trigger): \(error.localizedDescription)")
         }

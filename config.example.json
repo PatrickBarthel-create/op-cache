@@ -1,9 +1,9 @@
 {
-  "defaultTTL": "1h",
+  "defaultTTL": "8h",
   "profiles": {
     "private": {
       "account": "my.1password.eu",
-      "ttl": "1h",
+      "ttl": "8h",
       "secrets": {
         "EXAMPLE_API_TOKEN": "op://Development/Example API/credential"
       }

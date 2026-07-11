@@ -5,13 +5,13 @@ secrets for a short period without asking for Touch ID on every command.
 
 It is intentionally not a drop-in replacement for `op`. You authenticate once
 with `op-cache unlock`, the configured secrets are fetched, and only those
-values are cached in macOS Keychain. The default authorization window is one
-hour and the hard maximum is one day.
+values are cached in macOS Keychain. The default authorization window is eight
+hours and the hard maximum is one day.
 
 ## Security model
 
 - Every profile has an explicit environment-variable-to-`op://` allowlist.
-- Private and work profiles use separate 1Password accounts and Keychain
+- Private and Everlast profiles use separate 1Password accounts and Keychain
   services.
 - Cached values are encrypted at rest by macOS Keychain; no plaintext cache
   file is written.
@@ -57,7 +57,7 @@ Edit the copied file and use fixed secret references. A minimal profile is:
 
 ```json
 {
-  "defaultTTL": "1h",
+  "defaultTTL": "8h",
   "profiles": {
     "private": {
       "account": "my.1password.eu",
@@ -69,14 +69,14 @@ Edit the copied file and use fixed secret references. A minimal profile is:
 }
 ```
 
-TTL values support `s`, `m`, `h`, and `d`, for example `30m` or `1h`.
+TTL values support `s`, `m`, `h`, and `d`, for example `30m` or `8h`.
 
 ## Use
 
 Authenticate once and prefetch the allowlist:
 
 ```bash
-op-cache unlock private --ttl 1h
+op-cache unlock private --ttl 8h
 ```
 
 Run a command with only the required variables:

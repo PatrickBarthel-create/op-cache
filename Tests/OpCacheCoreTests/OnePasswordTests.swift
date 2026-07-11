@@ -40,6 +40,18 @@ import Testing
     }
 }
 
+@Test func largeOutputIsDrainedWithoutDeadlock() throws {
+    let stub = try stubExecutable(script: """
+    #!/bin/sh
+    head -c 200000 /dev/zero | tr '\\0' x
+    """)
+    defer { try? FileManager.default.removeItem(at: stub.directory) }
+
+    let onePassword = OnePassword(executableURL: stub.url)
+    let value = try onePassword.read(reference: "op://vault/item/field", account: "my.1password.eu")
+    #expect(value.utf8.count == 200000)
+}
+
 private func stubExecutable(script: String) throws -> (directory: URL, url: URL, log: URL) {
     let directory = FileManager.default.temporaryDirectory
         .appendingPathComponent(UUID().uuidString, isDirectory: true)

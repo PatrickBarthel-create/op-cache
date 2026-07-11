@@ -6,7 +6,7 @@ private let usage = """
 op-cache: authorize once, use allowlisted 1Password secrets for a short window
 
 Usage:
-  op-cache unlock <profile> [--ttl 1h]
+  op-cache unlock <profile> [--ttl 8h]
   op-cache run <profile> [--only NAME,NAME] -- <command> [args...]
   op-cache status <profile>
   op-cache clear <profile>
@@ -59,21 +59,12 @@ enum CLI {
     }
 
     private static func unlock(_ arguments: [String]) throws {
-        guard let profileName = arguments.first else {
-            throw OpCacheError.message("Usage: op-cache unlock <profile> [--ttl 1h]")
-        }
-
-        var ttlOverride: String?
-        if let index = arguments.firstIndex(of: "--ttl") {
-            guard arguments.indices.contains(index + 1) else {
-                throw OpCacheError.message("--ttl requires a value.")
-            }
-            ttlOverride = arguments[index + 1]
-        }
+        let parsed = try CLIArgumentParser.parseUnlock(arguments)
+        let profileName = parsed.profile
 
         let config = try loadConfig()
         let profile = try config.profile(named: profileName)
-        let ttlText = ttlOverride ?? profile.ttl ?? config.defaultTTL ?? "1h"
+        let ttlText = parsed.ttl ?? profile.ttl ?? config.defaultTTL ?? "8h"
         let ttl = try DurationParser.parse(ttlText)
         let onePassword = OnePassword()
 
@@ -105,19 +96,12 @@ enum CLI {
     }
 
     private static func run(_ arguments: [String]) throws {
-        guard let separator = arguments.firstIndex(of: "--"), separator > 0 else {
-            throw OpCacheError.message("Usage: op-cache run <profile> [--only NAME,NAME] -- <command> [args...]")
-        }
-
-        let options = Array(arguments[..<separator])
-        let command = Array(arguments[(separator + 1)...])
-        guard let profileName = options.first, !command.isEmpty else {
-            throw OpCacheError.message("A profile and command are required.")
-        }
+        let parsed = try CLIArgumentParser.parseRun(arguments)
+        let profileName = parsed.profile
 
         let config = try loadConfig()
         let profile = try config.profile(named: profileName)
-        let selectedNames = try selectedSecretNames(options: options, profile: profile)
+        let selectedNames = try selectedSecretNames(requested: parsed.only, profile: profile)
         let keychain = KeychainStore()
         var injected: [String: String] = [:]
         var unavailable: [String] = []
@@ -142,7 +126,7 @@ enum CLI {
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        process.arguments = command
+        process.arguments = parsed.command
         let configuredNames = config.profiles.values.flatMap(\.secrets.keys)
         process.environment = ChildEnvironment.compose(
             base: ProcessInfo.processInfo.environment,
@@ -238,16 +222,12 @@ enum CLI {
     }
 
     private static func selectedSecretNames(
-        options: [String],
+        requested: Set<String>?,
         profile: ProfileConfig
     ) throws -> Set<String> {
-        guard let index = options.firstIndex(of: "--only") else {
+        guard let names = requested else {
             return Set(profile.secrets.keys)
         }
-        guard options.indices.contains(index + 1) else {
-            throw OpCacheError.message("--only requires a comma-separated list.")
-        }
-        let names = Set(options[index + 1].split(separator: ",").map(String.init))
         let unknown = names.filter { profile.secrets[$0] == nil }
         guard unknown.isEmpty else {
             throw OpCacheError.message("Secrets are not allowlisted: \(unknown.sorted().joined(separator: ", ")).")
