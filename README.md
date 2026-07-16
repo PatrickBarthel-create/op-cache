@@ -127,6 +127,53 @@ clearing on every auto-lock would interrupt it. If you want the stricter
 behavior, run the watcher with `--lock` (edit the `ProgramArguments` in
 `~/Library/LaunchAgents/dev.peter.op-cache.watch.plist` and reload it).
 
+## Audit log
+
+`unlock` and `run` each append one JSON object to
+`~/Library/Logs/op-cache-audit.jsonl`: which allowlisted secret was involved,
+the `op://` reference naming its vault, item, and field, and for `run` the
+child executable it was injected into.
+
+```json
+{"account":"team.1password.com","argumentCount":2,"caller":{"path":"/bin/zsh","pid":73907},"command":"npm","event":"run","profile":"work","secrets":[{"name":"CLOUDFLARE_API_TOKEN","reference":"op://Development/Cloudflare/credential"}],"timestamp":"2026-07-16T15:22:33Z"}
+```
+
+Values are never written. Neither are the child's arguments: a command line is
+free-form and routinely carries secrets of its own, and a log that leaks them
+defeats its own purpose.
+
+Read it with `tail -f ~/Library/Logs/op-cache-audit.jsonl | jq`. Turn it off or
+move it in the config:
+
+```json
+{ "audit": { "enabled": false } }
+{ "audit": { "path": "~/logs/op-cache.jsonl" } }
+```
+
+### What it does and does not tell you
+
+This is an injection log, not an access log.
+
+- `unlock` is the only command that reaches 1Password, and it fetches the whole
+  profile in one go. Its entry records what you authorized, not what anything
+  turned out to need.
+- `run` records what went into the child's environment. Without `--only` that is
+  every secret in the profile, whether the child reads one of them or none. The
+  log measures the call, not the use.
+- Once a value is in the child's environment, op-cache is out of the picture.
+  The log cannot show what the child did with it or where it sent it.
+- A process that can run op-cache runs as your user and can rewrite this file.
+  The log is not tamper-evident and will not catch a hostile agent.
+
+It is useful for seeing what your own tooling actually touches, and for spotting
+allowlisted secrets that nothing has needed in weeks. Those belong out of the
+profile, and removing them shrinks the unattended blast radius in a way the log
+itself does not.
+
+A write failure warns on stderr and does not fail the command. The cache is the
+security boundary; failing closed here would only hand any caller a way to break
+`run` by deleting a file.
+
 ## Why not cache a full 1Password session?
 
 A full session would let the agent query any vault item available to your

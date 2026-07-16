@@ -2,10 +2,16 @@ import Foundation
 
 public struct AppConfig: Codable, Sendable {
     public var defaultTTL: String?
+    public var audit: AuditConfig?
     public var profiles: [String: ProfileConfig]
 
-    public init(defaultTTL: String? = nil, profiles: [String: ProfileConfig]) {
+    public init(
+        defaultTTL: String? = nil,
+        audit: AuditConfig? = nil,
+        profiles: [String: ProfileConfig]
+    ) {
         self.defaultTTL = defaultTTL
+        self.audit = audit
         self.profiles = profiles
     }
 

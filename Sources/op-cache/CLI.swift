@@ -92,6 +92,18 @@ enum CLI {
             try keychain.put(cached, name: name, profile: profileName)
         }
 
+        AuditLog(config: config.audit).record(
+            AuditEvent(
+                timestamp: now,
+                event: .unlock,
+                profile: profileName,
+                account: profile.account,
+                secrets: auditSecrets(names: fetched.keys, profile: profile),
+                ttl: ttlText,
+                expiresAt: expiresAt
+            )
+        )
+
         print("Unlocked \(fetched.count) allowlisted secret(s) until \(format(expiresAt)).")
     }
 
@@ -123,6 +135,19 @@ enum CLI {
                 "Run 'op-cache unlock \(profileName)'."
             )
         }
+
+        // Recorded before the spawn: the injection is what happens here, and
+        // this process exits with the child's status without returning.
+        AuditLog(config: config.audit).record(
+            AuditEvent(
+                event: .run,
+                profile: profileName,
+                account: profile.account,
+                secrets: auditSecrets(names: injected.keys, profile: profile),
+                command: parsed.command.first,
+                argumentCount: max(parsed.command.count - 1, 0)
+            )
+        )
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
@@ -233,6 +258,15 @@ enum CLI {
             throw OpCacheError.message("Secrets are not allowlisted: \(unknown.sorted().joined(separator: ", ")).")
         }
         return names
+    }
+
+    private static func auditSecrets(
+        names: some Sequence<String>,
+        profile: ProfileConfig
+    ) -> [AuditSecret] {
+        names.sorted().compactMap { name in
+            profile.secrets[name].map { AuditSecret(name: name, reference: $0) }
+        }
     }
 
     private static func loadConfig() throws -> AppConfig {

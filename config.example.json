@@ -1,5 +1,9 @@
 {
   "defaultTTL": "8h",
+  "audit": {
+    "enabled": true,
+    "path": "~/Library/Logs/op-cache-audit.jsonl"
+  },
   "profiles": {
     "private": {
       "account": "my.1password.com",
