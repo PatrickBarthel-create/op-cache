@@ -2,14 +2,14 @@
   "defaultTTL": "8h",
   "profiles": {
     "private": {
-      "account": "my.1password.eu",
+      "account": "my.1password.com",
       "ttl": "8h",
       "secrets": {
         "EXAMPLE_API_TOKEN": "op://Development/Example API/credential"
       }
     },
-    "everlast": {
-      "account": "everlastconsultinggmbh.1password.eu",
+    "work": {
+      "account": "example-team.1password.com",
       "ttl": "30m",
       "secrets": {
         "EXAMPLE_WORK_TOKEN": "op://Agent Development/Example Token/credential"

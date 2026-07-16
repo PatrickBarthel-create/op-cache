@@ -18,9 +18,21 @@ private final class DataCollector: @unchecked Sendable {
 }
 
 public struct OnePassword: Sendable {
+    public static let defaultSearchPaths = [
+        "/opt/homebrew/bin/op",
+        "/usr/local/bin/op",
+    ]
+
+    public static func locateExecutable() -> URL {
+        let found = defaultSearchPaths.first {
+            FileManager.default.isExecutableFile(atPath: $0)
+        }
+        return URL(fileURLWithPath: found ?? defaultSearchPaths[0])
+    }
+
     public let executableURL: URL
 
-    public init(executableURL: URL = URL(fileURLWithPath: "/opt/homebrew/bin/op")) {
+    public init(executableURL: URL = OnePassword.locateExecutable()) {
         self.executableURL = executableURL
     }
 

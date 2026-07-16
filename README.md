@@ -14,8 +14,8 @@ hours and the hard maximum is one day.
 ## Security model
 
 - Every profile has an explicit environment-variable-to-`op://` allowlist.
-- Private and Everlast profiles use separate 1Password accounts and Keychain
-  services.
+- Each profile can point at its own 1Password account and gets its own
+  Keychain service, so private and work secrets stay separated.
 - Cached values are encrypted at rest by macOS Keychain; no plaintext cache
   file is written.
 - A changed `op://` reference invalidates its previous cached value, and each
@@ -39,8 +39,9 @@ private keys.
 
 ## Build and install
 
-Requirements: macOS 13 or newer, Swift, and the 1Password CLI at
-`/opt/homebrew/bin/op` with desktop-app integration enabled.
+Requirements: macOS 13 or newer, Swift, and the 1Password CLI (`op`) at
+`/opt/homebrew/bin/op` or `/usr/local/bin/op` with desktop-app integration
+enabled.
 
 ```bash
 make test
