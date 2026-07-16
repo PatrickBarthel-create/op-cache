@@ -23,8 +23,13 @@ public enum DurationParser {
         }
 
         let duration = number * multiplier
-        guard duration <= 86_400 else {
-            throw OpCacheError.message("TTL must not exceed 1d.")
+        // Everlast fork only: upstream caps this at 1d by design. Raised to 3d
+        // on request, which is a real widening — during the window anything
+        // running as this user can pull any allowlisted secret via `op-cache
+        // run`, now across nights and weekends. Only safe alongside the sleep
+        // watcher, which clears the cache when the lid closes. Not for upstream.
+        guard duration <= 259_200 else {
+            throw OpCacheError.message("TTL must not exceed 3d.")
         }
         return duration
     }
