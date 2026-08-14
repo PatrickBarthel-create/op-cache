@@ -1,0 +1,23 @@
+#!/bin/sh
+# op-cache shim (Everlast fork only).
+#
+# Installed as ~/.local/bin/op, which precedes /opt/homebrew/bin in PATH, so
+# every plain `op` call routes through the cache. Calls that must not be cached
+# are forwarded to the real binary unchanged by `op-cache proxy` itself.
+#
+# Bypass for a single command:  OP_CACHE_SHIM=0 op item get X
+# Bypass permanently:           make uninstall-shim
+#
+# This wrapper must never be able to break `op`: if op-cache is missing or
+# fails to start, the real binary runs instead.
+
+OP_REAL=/opt/homebrew/bin/op
+[ -x "$OP_REAL" ] || OP_REAL=/usr/local/bin/op
+
+OP_CACHE_BIN="${OP_CACHE_BIN:-$HOME/.local/bin/op-cache}"
+
+if [ "${OP_CACHE_SHIM:-1}" = "0" ] || [ ! -x "$OP_CACHE_BIN" ]; then
+    exec "$OP_REAL" "$@"
+fi
+
+exec "$OP_CACHE_BIN" proxy -- "$@"

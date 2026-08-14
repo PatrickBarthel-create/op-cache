@@ -47,6 +47,8 @@ public struct AuditEvent: Codable, Sendable, Equatable {
     public enum Kind: String, Codable, Sendable {
         case unlock
         case run
+        /// Everlast fork only: an `op` call answered through the shim.
+        case proxy
     }
 
     public let timestamp: Date
@@ -61,6 +63,13 @@ public struct AuditEvent: Codable, Sendable, Equatable {
     /// audit log that leaks them defeats its own purpose.
     public let command: String?
     public let argumentCount: Int?
+    /// Proxy events only: the `op` subcommand path, e.g. "item get". Never the
+    /// arguments, for the same reason `command` omits them.
+    public let subcommand: String?
+    /// Proxy events only: how the call was classified, and whether the cache
+    /// answered it. Together these show which calls still cost an approval.
+    public let cacheKind: String?
+    public let cacheHit: Bool?
     public let caller: AuditCaller
 
     public init(
@@ -73,6 +82,9 @@ public struct AuditEvent: Codable, Sendable, Equatable {
         expiresAt: Date? = nil,
         command: String? = nil,
         argumentCount: Int? = nil,
+        subcommand: String? = nil,
+        cacheKind: String? = nil,
+        cacheHit: Bool? = nil,
         caller: AuditCaller = .current()
     ) {
         self.timestamp = timestamp
@@ -84,6 +96,9 @@ public struct AuditEvent: Codable, Sendable, Equatable {
         self.expiresAt = expiresAt
         self.command = command
         self.argumentCount = argumentCount
+        self.subcommand = subcommand
+        self.cacheKind = cacheKind
+        self.cacheHit = cacheHit
         self.caller = caller
     }
 }

@@ -12,10 +12,18 @@ Usage:
   op-cache clear <profile>
   op-cache sweep
   op-cache watch [--lock]
+  op-cache proxy -- op <args...>
+  op-cache refresh
 
 sweep removes expired, changed, or no-longer-allowlisted entries in all profiles.
 watch runs until stopped and clears all profiles on system sleep; --lock also
 clears on screen lock. Install it as a LaunchAgent with 'make install-watch'.
+
+proxy answers an op invocation from cache when that is safe and forwards it
+otherwise; install the shim with 'make install-shim' so plain 'op' uses it.
+Set OP_CACHE_SHIM=0 to bypass it for one command. Proxied secrets live in the
+'_proxy' profile; 'op-cache status _proxy' and 'op-cache clear _proxy' work on
+them. refresh drops the cached listings so newly created items become visible.
 
 Config: ~/.config/op-cache/config.json
 Override with OP_CACHE_CONFIG=/path/to/config.json
@@ -53,6 +61,10 @@ enum CLI {
             try sweep()
         case "watch":
             try watch(Array(arguments.dropFirst()))
+        case "proxy":
+            try proxy(Array(arguments.dropFirst()))
+        case "refresh":
+            refresh()
         default:
             throw OpCacheError.message("Unknown command '\(command)'.\n\n\(usage)")
         }
@@ -67,19 +79,36 @@ enum CLI {
         let ttlText = parsed.ttl ?? profile.ttl ?? config.defaultTTL ?? "8h"
         let ttl = try DurationParser.parse(ttlText)
         let onePassword = OnePassword()
+        let keychain = KeychainStore()
+
+        // Everlast fork only: fetch what is missing rather than the whole
+        // profile. Upstream refetches every secret on each unlock, which turns
+        // adding one entry into a full re-read of the profile.
+        var missing: [String] = []
+        for name in profile.secrets.keys.sorted() {
+            guard let reference = profile.secrets[name] else { continue }
+            let cached = try? keychain.get(name: name, profile: profileName)
+            if cached?.isValid(reference: reference, account: profile.account) != true {
+                missing.append(name)
+            }
+        }
+
+        guard !missing.isEmpty else {
+            print("'\(profileName)' is already unlocked; nothing to fetch.")
+            return
+        }
 
         print("Authenticate 1Password once to unlock '\(profileName)' for \(ttlText).")
         try onePassword.authenticate(account: profile.account)
 
         var fetched: [String: String] = [:]
-        for name in profile.secrets.keys.sorted() {
+        for name in missing {
             guard let reference = profile.secrets[name] else { continue }
             fetched[name] = try onePassword.read(reference: reference, account: profile.account)
         }
 
         let now = Date()
         let expiresAt = now.addingTimeInterval(ttl)
-        let keychain = KeychainStore()
         for name in fetched.keys.sorted() {
             guard let value = fetched[name], let reference = profile.secrets[name] else { continue }
             let cached = CachedSecret(
@@ -170,6 +199,10 @@ enum CLI {
         guard let profileName = arguments.first else {
             throw OpCacheError.message("Usage: op-cache status <profile>")
         }
+        if profileName == ProxyRunner.profileName {
+            try proxyStatus()
+            return
+        }
         let profile = try loadConfig().profile(named: profileName)
         let keychain = KeychainStore()
 
@@ -188,6 +221,33 @@ enum CLI {
         }
     }
 
+    /// The proxy profile is keyed by a digest of the command line, so listing
+    /// entry names would say nothing. What is useful is how much is open and
+    /// for how long.
+    private static func proxyStatus() throws {
+        let keychain = KeychainStore()
+        let names = try keychain.list(profile: ProxyRunner.profileName)
+        var live = 0
+        var expired = 0
+        var latest: Date?
+
+        for name in names {
+            guard let cached = try keychain.get(name: name, profile: ProxyRunner.profileName),
+                  cached.isValid(reference: name, account: ProxyRunner.profileName) else {
+                expired += 1
+                continue
+            }
+            live += 1
+            if latest == nil || cached.expiresAt > latest! { latest = cached.expiresAt }
+        }
+
+        print("proxied secrets: \(live) unlocked, \(expired) expired")
+        if let latest {
+            print("last one expires \(format(latest))")
+        }
+        print("cached listings: \(MetaCache().count()) (no expiry; 'op-cache refresh' drops them)")
+    }
+
     private static func clear(_ arguments: [String]) throws {
         guard let profileName = arguments.first else {
             throw OpCacheError.message("Usage: op-cache clear <profile>")
@@ -204,6 +264,20 @@ enum CLI {
         var removed = 0
 
         for profileName in try keychain.allProfiles() {
+            // The proxy profile is populated at call time and never appears in
+            // the config, so the "not in config" rule would wipe it wholesale.
+            // Its entries still age out like any other.
+            if profileName == ProxyRunner.profileName {
+                for name in try keychain.list(profile: profileName).sorted() {
+                    guard let cached = try keychain.get(name: name, profile: profileName),
+                          cached.isValid(reference: name, account: profileName) else {
+                        try keychain.delete(name: name, profile: profileName)
+                        removed += 1
+                        continue
+                    }
+                }
+                continue
+            }
             guard let profile = config.profiles[profileName] else {
                 removed += try keychain.list(profile: profileName).count
                 try keychain.clear(profile: profileName)
@@ -244,6 +318,57 @@ enum CLI {
         MainActor.assumeIsolated {
             Watcher.run(includeScreenLock: includeScreenLock)
         }
+    }
+
+    /// Everlast fork only. Answers one `op` invocation, from cache where that
+    /// is safe.
+    ///
+    /// This runs in place of `op` for every call on the machine, so it must
+    /// never be able to break `op`. Any failure of our own — missing config,
+    /// unreadable Keychain, a classification we did not anticipate — falls
+    /// through to running `op` unchanged.
+    private static func proxy(_ arguments: [String]) throws {
+        let separator = arguments.firstIndex(of: "--")
+        let command = separator.map { Array(arguments[($0 + 1)...]) } ?? arguments
+        guard !command.isEmpty else {
+            throw OpCacheError.message("Usage: op-cache proxy -- op <args...>")
+        }
+
+        // The shim passes the full command line including the "op" it replaced.
+        let opArguments = command.first == "op" || command.first?.hasSuffix("/op") == true
+            ? Array(command.dropFirst())
+            : command
+
+        let onePassword = OnePassword()
+
+        func forward() -> Never {
+            let status = (try? onePassword.passthrough(opArguments)) ?? 1
+            exit(status)
+        }
+
+        // A config is required for the TTL, but its absence must not take op
+        // down with it.
+        guard let config = try? loadConfig() else { forward() }
+        let ttlText = config.defaultTTL ?? "8h"
+        guard let ttl = try? DurationParser.parse(ttlText) else { forward() }
+
+        let runner = ProxyRunner(
+            onePassword: onePassword,
+            audit: AuditLog(config: config.audit, warn: { _ in }),
+            ttl: ttl,
+            ttlText: ttlText
+        )
+
+        guard let status = try? runner.run(opArguments) else { forward() }
+        exit(status)
+    }
+
+    /// Drops the cached listings. The metadata cache has no expiry, so this is
+    /// the manual counterpart to the automatic invalidation on writes and
+    /// failed lookups.
+    private static func refresh() {
+        let removed = MetaCache().clear()
+        print(removed == 0 ? "No cached listings." : "Dropped \(removed) cached listing(s).")
     }
 
     private static func selectedSecretNames(
