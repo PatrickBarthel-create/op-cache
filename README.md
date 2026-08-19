@@ -105,6 +105,61 @@ from the allowlist, or belonging to a profile deleted from the config):
 op-cache sweep
 ```
 
+## Unlock every vault (Everlast fork only)
+
+`unlock --all` prefetches every item of every vault in every account `op`
+knows, so later calls are answered from cache even the first time a secret is
+asked for:
+
+```bash
+op-cache unlock --all                      # every account
+op-cache unlock --all --account everlast   # one account
+op-cache status _items                     # what is open, and until when
+op-cache clear _items                      # close it again
+```
+
+Measured on the machine this was built for: 991 items across 16 vaults in two
+accounts, about two and a half minutes at six concurrent workers, one biometric
+approval per account. Afterwards 991 of 992 items answer without any approval
+(the remaining one is broken in 1Password itself).
+
+This works because prefetched items are keyed by **where they live** - account,
+vault, item - rather than by a digest of the argument vector. One stored copy
+therefore answers `op read`, `op item get --fields` and `op item get --format
+json` alike, addressed by title or by ID, with or without `--account`.
+
+Three rules keep it honest, each of them measured against the real `op`:
+
+- **A reference `op` refuses is refused here too.** Its parser accepts only
+  letters, digits, space, `_`, `-`, `.` and `=` in a segment. Without that
+  rule the cache answered 32 of 240 sampled calls that `op` itself rejects,
+  for items named like `[CLI] N8N API Key | Ajdamirova`.
+- **An ambiguous name is never resolved.** `op` matches items by their URLs as
+  well as their titles, so `telnyx.com` can mean two items and `op` says so.
+  The index carries the URLs to see the same ambiguity and forwards the call.
+- **One-time passwords never come from cache.** `--format json` returns both
+  the current code and the seed. The seed is stripped before storing, and any
+  path that would return an OTP field is forwarded instead.
+
+Output shapes that cannot be reproduced are forwarded rather than guessed: the
+default human format prints relative timestamps, and `--fields` combined with
+`--format json` is its own shape. Both still work, they just cost an approval.
+
+### What this costs
+
+For the duration of the TTL, every field of every item is readable from the
+Keychain without an approval by any process running as this user. That is the
+point of it, and it is a deliberate widening far beyond the upstream
+allowlist. `op-cache status _items` says how much is open; `op-cache clear
+_items` closes it.
+
+One operational note: macOS grants Keychain access per entry and per program,
+and a rebuilt binary is a different program. Items are therefore bundled one
+entry per vault rather than one per item - 16 confirmations after an update
+instead of 990 - and running `unlock --all` once after installing a new build
+avoids them entirely, because then the running binary is the one that wrote
+them.
+
 ## Auto-clear on sleep
 
 `op-cache watch` runs in the foreground and clears every profile the moment

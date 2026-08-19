@@ -7,6 +7,7 @@ op-cache: authorize once, use allowlisted 1Password secrets for a short window
 
 Usage:
   op-cache unlock <profile> [--ttl 8h]
+  op-cache unlock --all [--ttl 3d] [--account <alias>[,<alias>]]
   op-cache run <profile> [--only NAME,NAME] -- <command> [args...]
   op-cache status <profile>
   op-cache clear <profile>
@@ -18,6 +19,12 @@ Usage:
 sweep removes expired, changed, or no-longer-allowlisted entries in all profiles.
 watch runs until stopped and clears all profiles on system sleep; --lock also
 clears on screen lock. Install it as a LaunchAgent with 'make install-watch'.
+
+unlock --all prefetches every item of every vault in every account, so later
+calls are answered from cache even the first time a secret is asked for. The
+values then sit in the Keychain for the TTL, readable without approval by any
+process running as this user. 'op-cache status _items' shows how much is open
+and 'op-cache clear _items' closes it again.
 
 proxy answers an op invocation from cache when that is safe and forwards it
 otherwise; install the shim with 'make install-shim' so plain 'op' uses it.
@@ -72,7 +79,13 @@ enum CLI {
 
     private static func unlock(_ arguments: [String]) throws {
         let parsed = try CLIArgumentParser.parseUnlock(arguments)
-        let profileName = parsed.profile
+        if parsed.all {
+            try unlockAll(parsed)
+            return
+        }
+        guard let profileName = parsed.profile else {
+            throw OpCacheError.message("Usage: op-cache unlock <profile> [--ttl 8h]")
+        }
 
         let config = try loadConfig()
         let profile = try config.profile(named: profileName)
@@ -134,6 +147,40 @@ enum CLI {
         )
 
         print("Unlocked \(fetched.count) allowlisted secret(s) until \(format(expiresAt)).")
+    }
+
+    /// Everlast fork only. Unlocks the accounts rather than a profile.
+    ///
+    /// The curated allowlist upstream exists so an agent can hold a few named
+    /// secrets and nothing else. This does the opposite on purpose, and the
+    /// output says so: after this runs, every field of every item is readable
+    /// without an approval until the TTL expires.
+    private static func unlockAll(_ parsed: UnlockArguments) throws {
+        let config = try loadConfig()
+        let ttlText = parsed.ttl ?? config.defaultTTL ?? "8h"
+        let ttl = try DurationParser.parse(ttlText)
+
+        let runner = PrefetchRunner(audit: AuditLog(config: config.audit))
+        let summary = try runner.run(
+            accountFilter: parsed.accounts,
+            ttl: ttl,
+            ttlText: ttlText,
+            // Flushed per line: a run this long is watched through a pipe as
+            // often as a terminal, and block buffering makes it look hung.
+            log: { print($0); fflush(stdout) }
+        )
+
+        print("")
+        print("Unlocked \(summary.stored) item(s) from \(summary.vaults) vault(s) " +
+              "in \(summary.accounts) account(s) until \(format(summary.expiresAt)).")
+        if summary.skipped > 0 {
+            print("Skipped \(summary.skipped) oversized item(s); those still prompt.")
+        }
+        if summary.failed > 0 {
+            print("Failed on \(summary.failed) item(s); those still prompt.")
+        }
+        print("Every field of these items is now readable without approval for \(ttlText). " +
+              "Close it early with 'op-cache clear _items'.")
     }
 
     private static func run(_ arguments: [String]) throws {
@@ -203,6 +250,10 @@ enum CLI {
             try proxyStatus()
             return
         }
+        if profileName == ItemStore.profileName {
+            itemStatus()
+            return
+        }
         let profile = try loadConfig().profile(named: profileName)
         let keychain = KeychainStore()
 
@@ -248,9 +299,33 @@ enum CLI {
         print("cached listings: \(MetaCache().count()) (no expiry; 'op-cache refresh' drops them)")
     }
 
+    /// Everlast fork only. What `unlock --all` left open: how many items, how
+    /// long, and how they are reachable.
+    private static func itemStatus() {
+        let counts = ItemStore().counts()
+        print("prefetched vaults: \(counts.live) unlocked, \(counts.expired) expired")
+        if let latest = counts.latestExpiry {
+            print("last one expires \(format(latest))")
+        }
+        if let index = ItemIndex.load() {
+            let vaults = index.accounts.reduce(0) { $0 + $1.vaults.count }
+            print("index: \(index.itemCount) item(s) across \(vaults) vault(s) " +
+                  "in \(index.accounts.count) account(s), built \(format(index.builtAt))")
+        } else {
+            print("index: none (prefetched items cannot be found by reference)")
+        }
+    }
+
     private static func clear(_ arguments: [String]) throws {
         guard let profileName = arguments.first else {
             throw OpCacheError.message("Usage: op-cache clear <profile>")
+        }
+        // The prefetch also wrote an index naming those items; clearing one
+        // without the other would leave a map to secrets that are gone.
+        if profileName == ItemStore.profileName {
+            let removed = ItemStore().clear()
+            print("Cleared \(removed) prefetched vault(s) and the index.")
+            return
         }
         // Deliberately config-free so profiles removed from the config can
         // still be cleared.
@@ -264,10 +339,11 @@ enum CLI {
         var removed = 0
 
         for profileName in try keychain.allProfiles() {
-            // The proxy profile is populated at call time and never appears in
-            // the config, so the "not in config" rule would wipe it wholesale.
-            // Its entries still age out like any other.
-            if profileName == ProxyRunner.profileName {
+            // The proxy and item-store profiles are populated at call and
+            // prefetch time and never appear in the config, so the "not in
+            // config" rule would wipe them wholesale. Their entries still age
+            // out like any other.
+            if profileName == ProxyRunner.profileName || profileName == ItemStore.profileName {
                 for name in try keychain.list(profile: profileName).sorted() {
                     guard let cached = try keychain.get(name: name, profile: profileName),
                           cached.isValid(reference: name, account: profileName) else {

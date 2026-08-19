@@ -29,6 +29,8 @@ public struct ProxyRunner: Sendable {
     private let onePassword: OnePassword
     private let keychain: KeychainStore
     private let meta: MetaCache
+    private let items: ItemStore
+    private let resolver: ItemResolver
     private let audit: AuditLog
     private let ttl: TimeInterval
     private let ttlText: String
@@ -38,6 +40,8 @@ public struct ProxyRunner: Sendable {
         onePassword: OnePassword = OnePassword(),
         keychain: KeychainStore = KeychainStore(),
         meta: MetaCache = MetaCache(),
+        items: ItemStore = ItemStore(),
+        resolver: ItemResolver = ItemResolver(),
         audit: AuditLog,
         ttl: TimeInterval,
         ttlText: String,
@@ -46,6 +50,8 @@ public struct ProxyRunner: Sendable {
         self.onePassword = onePassword
         self.keychain = keychain
         self.meta = meta
+        self.items = items
+        self.resolver = resolver
         self.audit = audit
         self.ttl = ttl
         self.ttlText = ttlText
@@ -65,15 +71,26 @@ public struct ProxyRunner: Sendable {
             let status = try onePassword.passthrough(arguments)
             // A create or edit can make any cached listing wrong, so the
             // metadata cache is dropped rather than aged out. This is what
-            // lets it live without an expiry.
-            if status == 0 { meta.clear() }
+            // lets it live without an expiry. Prefetched items go with it:
+            // they answer far more call shapes than a listing does, so a
+            // stale one is correspondingly worse.
+            if status == 0 {
+                meta.clear()
+                items.clear()
+            }
             return status
 
         case .metadata:
             return try serve(call, arguments: arguments, from: metadataLoader, store: storeMetadata)
 
         case .secret:
-            return try serve(call, arguments: arguments, from: secretLoader, store: storeSecret)
+            return try serve(
+                call,
+                arguments: arguments,
+                from: secretLoader,
+                store: storeSecret,
+                prefetched: { resolver.answer(for: arguments) }
+            )
         }
     }
 
@@ -86,13 +103,23 @@ public struct ProxyRunner: Sendable {
         _ call: ClassifiedCall,
         arguments: [String],
         from load: Loader,
-        store: Store
+        store: Store,
+        prefetched: (() -> String?)? = nil
     ) throws -> Int32 {
         guard let key = call.key else { return try onePassword.passthrough(arguments) }
 
         if let cached = load(key) {
             write(cached, to: FileHandle.standardOutput)
             record(call, hit: true)
+            return 0
+        }
+
+        // The digest cache only matches a call spelled exactly as before. A
+        // prefetched item is keyed by where it lives, so it answers the same
+        // secret however it was addressed - including the first time.
+        if let answer = prefetched?() {
+            write(answer, to: FileHandle.standardOutput)
+            record(call, hit: true, kind: "item-store")
             return 0
         }
 
@@ -162,7 +189,7 @@ public struct ProxyRunner: Sendable {
         handle.write(Data(text.utf8))
     }
 
-    private func record(_ call: ClassifiedCall, hit: Bool) {
+    private func record(_ call: ClassifiedCall, hit: Bool, kind: String? = nil) {
         audit.record(
             AuditEvent(
                 event: .proxy,
@@ -171,7 +198,7 @@ public struct ProxyRunner: Sendable {
                 secrets: [],
                 ttl: call.kind == .secret ? ttlText : nil,
                 subcommand: call.subcommand,
-                cacheKind: call.kind.rawValue,
+                cacheKind: kind ?? call.kind.rawValue,
                 cacheHit: hit
             )
         )
