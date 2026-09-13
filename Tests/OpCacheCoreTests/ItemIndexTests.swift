@@ -126,14 +126,14 @@ private func makeIndex() -> ItemIndex {
 
 @Test func aNarrowedPrefetchKeepsTheOtherAccountsInTheIndex() {
     // Tenth adversarial round: a one-account retry used to replace the index.
-    let everlast = IndexedAccount(url: "everlastconsultinggmbh.1password.eu", aliases: ["everlast"], vaults: [])
-    let strategie = IndexedAccount(url: "strategie-fm.1password.eu", aliases: ["strategie"], vaults: [])
-    let full = ItemIndex(builtAt: Date(), accounts: [everlast, strategie])
-    let refreshed = IndexedAccount(url: "strategie-fm.1password.eu", aliases: ["strategie", "neu"], vaults: [])
+    let first = IndexedAccount(url: "first.1password.eu", aliases: ["first"], vaults: [])
+    let second = IndexedAccount(url: "second.1password.eu", aliases: ["second"], vaults: [])
+    let full = ItemIndex(builtAt: Date(), accounts: [first, second])
+    let refreshed = IndexedAccount(url: "second.1password.eu", aliases: ["second", "neu"], vaults: [])
 
     let merged = ItemIndex.merging(existing: full, fresh: [refreshed])
-    #expect(merged.accounts.map(\.url).sorted() == ["everlastconsultinggmbh.1password.eu", "strategie-fm.1password.eu"])
-    #expect(merged.accounts.first { $0.url == "strategie-fm.1password.eu" }?.aliases == ["strategie", "neu"])
+    #expect(merged.accounts.map(\.url).sorted() == ["first.1password.eu", "second.1password.eu"])
+    #expect(merged.accounts.first { $0.url == "second.1password.eu" }?.aliases == ["second", "neu"])
     // No previous index: the fresh accounts alone.
-    #expect(ItemIndex.merging(existing: nil, fresh: [everlast]).accounts.count == 1)
+    #expect(ItemIndex.merging(existing: nil, fresh: [first]).accounts.count == 1)
 }

@@ -272,10 +272,9 @@ retried once on the next tick and after that at most every six hours. An
 approval dialog left unanswered runs into op's own timeout; measured on the
 first evening, one stood open for 70 minutes before that.
 
-Accounts on this machine, as the first live run listed them:
-`everlastconsultinggmbh.1password.eu`, `strategie-fm.1password.eu` and
-`momento-kuechen.1password.com` (11 items) - the third is not in the
-workspace's notes on 1Password accounts and prompts on its own.
+The first live run listed three accounts on this machine where the notes
+knew two; every account `op` is signed into prompts on its own, so a full
+warm-up costs one approval per account, not one.
 
 `op-cache-notify` runs every minute and raises a macOS notification for:
 
