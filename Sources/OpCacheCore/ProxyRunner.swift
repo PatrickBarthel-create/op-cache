@@ -190,22 +190,44 @@ public struct ProxyRunner: Sendable {
     /// and cannot be told apart from a PIN by name alone.
     static func isCacheable(_ value: String) -> Bool {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        // A bare code, alone or as one column of a `--fields` CSV line.
-        if trimmed.split(separator: ",").contains(where: { column in
-            column.count >= 6 && column.count <= 8 && column.allSatisfy(\.isNumber)
-        }) { return false }
-        // The seed itself, as `op read op://v/i/<otp field>` returns it: an
-        // otpauth URI or a bare base32 string. A base32-only API key would be
-        // refused too; that costs one approval, never a wrong value.
-        if trimmed.lowercased().hasPrefix("otpauth://") { return false }
-        if trimmed.count >= 16, trimmed.range(of: "^[A-Z2-7]+=*$", options: .regularExpression) != nil {
-            return false
-        }
         // Any JSON shape that carries an OTP field: the full item, a single
         // field object, or a `--fields` array.
         if trimmed.hasPrefix("{") || trimmed.hasPrefix("[") {
             if trimmed.range(of: #""type"\s*:\s*"OTP""#, options: [.regularExpression, .caseInsensitive]) != nil {
                 return false
+            }
+        }
+        // Everything else is looked at token by token - a line of the table
+        // format, a column of a `--fields` CSV line, a word of a seed shown in
+        // groups of four - because op prints an OTP field as the code, the
+        // seed, or an otpauth URI depending on the call. Refused: a
+        // six-to-eight-digit code, an otpauth URI, a base32 run of 16 or
+        // more characters (case-insensitive: a seed typed by hand keeps its
+        // case). A base32-looking API key is refused too; that costs one
+        // approval, never a wrong value.
+        let tokens = trimmed.split(whereSeparator: { $0 == "," || $0.isNewline || $0 == "\t" })
+        for token in tokens {
+            let piece = token.trimmingCharacters(in: .whitespaces)
+            // The table format puts the label first: "one-time password  otpauth://…".
+            if piece.lowercased().contains("otpauth://") { return false }
+            let words = piece.split(separator: " ").map(String.init)
+            for word in words where word.count >= 6 && word.count <= 8 && word.allSatisfy(\.isNumber) {
+                return false
+            }
+            // A seed as one word, or shown in groups of four - either way the
+            // run without spaces is what is measured. A table line is looked
+            // at word by word as well, so the label in front does not hide it.
+            for candidate in [piece.replacingOccurrences(of: " ", with: "")] + words
+            where candidate.count >= 16 {
+                if candidate.range(of: "^[A-Z2-7]+=*$", options: .regularExpression) != nil { return false }
+                // Lower-case base32 collides with an all-letter passphrase,
+                // which is common and must stay cacheable; a seed almost
+                // always carries digits, so lower case is refused only with
+                // at least two of them.
+                if candidate.range(of: "^[a-z2-7]+=*$", options: .regularExpression) != nil,
+                   candidate.filter(\.isNumber).count >= 2 {
+                    return false
+                }
             }
         }
         return true
