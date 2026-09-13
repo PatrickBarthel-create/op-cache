@@ -75,3 +75,13 @@ import Testing
     // In JSON the ID sits in quotes and is never a bare run.
     #expect(ProxyRunner.isCacheable(#"{"id":"26ykszxp7l7b4fov5lcvoiiflm","fields":[{"type":"CONCEALED","value":"pw"}]}"#))
 }
+
+@Test func onlyTheItemIdLineIsExemptFromTheSeedCheck() {
+    // Eleventh adversarial round: a field merely labelled "ID" is not.
+    #expect(ProxyRunner.isCacheable("ID:          26ykszxp7l7b4fov5lcvoiiflm\n"))
+    // A field labelled "ID" sits indented under "Fields:", never at the top.
+    let withIdField = "ID:          26ykszxp7l7b4fov5lcvoiiflm\nFields:\n  ID:        jbswy3dpehpk3pxpjbswy3dpeh\n"
+    #expect(!ProxyRunner.isCacheable(withIdField))
+    // A 32-character run on the ID line is not an item ID either.
+    #expect(!ProxyRunner.isCacheable("ID: jbswy3dpehpk3pxpjbswy3dpehpk3pxp\n"))
+}

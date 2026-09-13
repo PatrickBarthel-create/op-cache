@@ -212,8 +212,9 @@ public struct ProxyRunner: Sendable {
             if piece.lowercased().contains("otpauth://") { return false }
             // The `ID:` line of the table format is the one place op prints a
             // bare lower-case base32 run that is not a seed: the item's ID, 26
-            // characters. Only that line is exempt from the seed check below.
-            if piece.hasPrefix("ID:") { continue }
+            // characters, unindented at the top. Only that line is exempt from
+            // the seed check below; a field merely labelled "ID" is indented.
+            if token.range(of: "^ID:\\s+[a-z2-7]{26}\\s*$", options: .regularExpression) != nil { continue }
             let words = piece.split(separator: " ").map(String.init)
             for word in words where word.count >= 6 && word.count <= 8 && word.allSatisfy(\.isNumber) {
                 return false

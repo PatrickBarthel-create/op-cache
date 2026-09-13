@@ -191,6 +191,26 @@ check "partial after a partial waits" $([[ "$out" == *"last attempt"* ]] && prin
 out=$(run "$cold" OP_CACHE_WARM_START=0 OP_CACHE_WARM_END=24)
 check "a complete unlock clears the marker" $([[ ! -f "$WORK/tmp/op-cache-warm.partial" && ! -f "$WORK/tmp/op-cache-warm.last-attempt" ]] && print 1 || print 0) "$out"
 
+# 8c. An expired bundle beside warm ones is a cold cache: the expiries were
+#     staggered by a one-account retry, and the main account has lapsed.
+rm -f "$WORK/tmp/op-cache-warm.partial" "$WORK/tmp/op-cache-warm.last-attempt"
+staggered=$(stub staggered 0 'prefetched vaults: 3 unlocked, 8 expired')
+out=$(run "$staggered" OP_CACHE_WARM_START=0 OP_CACHE_WARM_END=24)
+check "expired vaults beside warm ones rewarm everything" $([[ "$out" == *"partly expired (3 warm, 8 expired"* && "$out" == *"cache cold, running unlock"* ]] && print 1 || print 0) "$out"
+
+# 8d. A marker naming an account op no longer knows is dropped, not retried for ever.
+print -r -- "skipped gone.1password.eu" > "$WORK/tmp/op-cache-warm.partial"
+rm -f "$WORK/tmp/op-cache-warm.last-attempt"
+gone=$(stub gone 1 'prefetched vaults: 8 unlocked, 0 expired
+No matching 1Password accounts. Check '"'"'op account list'"'"'.')
+{
+    print '#!/bin/sh'
+    print 'if [ "$1" = "status" ]; then echo "prefetched vaults: 8 unlocked, 0 expired"; exit 0; fi'
+    print 'echo "No matching 1Password accounts. Check op account list."; exit 1'
+} > "$gone"
+out=$(run "$gone" OP_CACHE_WARM_START=0 OP_CACHE_WARM_END=24)
+check "unknown account in the marker drops the marker" $([[ "$out" == *"dropping it"* && ! -f "$WORK/tmp/op-cache-warm.partial" ]] && print 1 || print 0) "$out"
+
 # 9. A locked screen skips, whatever the cache says.
 out=$(env OP_CACHE_WARM_SCREEN_LOCKED_CMD=true OP_CACHE_BIN="$cold" OP_CACHE_WARM_STATE_DIR="$WORK/tmp" OP_CACHE_WARM_START=0 OP_CACHE_WARM_END=24 "$TOOL" 2>&1)
 check "locked screen skips" $([[ "$out" == *"screen locked"* && "$out" != *"running unlock"* ]] && print 1 || print 0) "$out"

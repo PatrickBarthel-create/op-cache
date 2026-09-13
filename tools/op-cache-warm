@@ -89,6 +89,7 @@ trap 'rm -f "$LOCK/pid"; rmdir "$LOCK" 2>/dev/null' EXIT INT TERM
 items_status=$("$OP_CACHE" status _items 2>&1)
 rc=$?
 unlocked=$(print -r -- "$items_status" | sed -n 's/^prefetched vaults: \([0-9][0-9]*\) unlocked.*/\1/p')
+expired=$(print -r -- "$items_status" | sed -n 's/^prefetched vaults: [0-9][0-9]* unlocked, \([0-9][0-9]*\) expired.*/\1/p')
 
 # An unreadable status is not a cold cache. Warming on it would answer a
 # crashed or reworded status command with a biometric prompt, which is the one
@@ -105,6 +106,15 @@ fi
 # as a marker, and a marked warm-up is redone after the retry interval. A
 # vault count would not do: empty vaults do not count as unlocked, so the
 # number moves with the vaults' contents.
+# An expired bundle counts as cold: a retry for one account gives that
+# account a later expiry than the rest, so the main account can lapse while
+# "unlocked" still reads above zero. That is the ordinary three-day rewarm,
+# and it is done for every account at once so the expiries line up again.
+if (( ${expired:-0} > 0 )); then
+    log "cache partly expired ($unlocked warm, $expired expired vaults), treating as cold"
+    unlocked=0
+fi
+
 if (( unlocked > 0 )); then
     if [[ ! -f "$PARTIAL_MARK" ]]; then
         log "cache warm ($unlocked vaults), nothing to do"
@@ -166,5 +176,11 @@ else
     code=$?
     cat "$UNLOCK_OUT"
     log "unlock failed with exit $code"
+    # A marker naming an account op no longer knows would fail like this
+    # every six hours for ever; drop it, the next cold run sees what exists.
+    if grep -q 'No matching 1Password accounts' "$UNLOCK_OUT"; then
+        log "marker names an account op does not know, dropping it"
+        rm -f "$PARTIAL_MARK" "$RETRY_STAMP"
+    fi
     exit $code
 fi
