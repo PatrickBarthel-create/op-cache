@@ -56,9 +56,9 @@ DEFAULTS = {
     "rate_threshold": 50,
     # Never repeat the burst warning more often than this.
     "rate_cooldown_minutes": 60,
-    # How far back a run will report. Bounds the catch-up after downtime.
-    "catchup_minutes": 60,
-    # One notification per run at most; more subjects than this are summarised.
+    # One notification per run at most; more subjects than this are summarised
+    # in the banner. The full list always goes to stdout, which launchd keeps
+    # in ~/Library/Logs/op-cache-notify.log.
     "max_named_subjects": 4,
     "enabled": True,
 }
@@ -72,11 +72,27 @@ NAMED_KINDS = {"secret", "item-store", "metadata", "passthrough", "mutating"}
 def load_config() -> dict:
     config = dict(DEFAULTS)
     try:
-        config.update(json.loads(CONFIG.read_text()))
+        loaded = json.loads(CONFIG.read_text())
     except FileNotFoundError:
-        pass
+        return config
     except (OSError, ValueError) as error:
         warn(f"config ignored: {error}")
+        return config
+    if not isinstance(loaded, dict):
+        warn("config ignored: not an object")
+        return config
+    # A wrong type must not turn every minute's run into a traceback with no
+    # notification behind it; the key falls back to its default and says so.
+    for key, value in loaded.items():
+        if key not in DEFAULTS:
+            warn(f"config: unknown key {key!r} ignored")
+            continue
+        if not isinstance(value, type(DEFAULTS[key])) or isinstance(value, bool) != isinstance(
+            DEFAULTS[key], bool
+        ):
+            warn(f"config: {key} must be {type(DEFAULTS[key]).__name__}, using default")
+            continue
+        config[key] = value
     return config
 
 
@@ -89,9 +105,15 @@ def load_state() -> dict:
 
 
 def save_state(state: dict) -> None:
+    # The state mirrors every reference from the audit log, which is 0600. It
+    # gets the same mode: an item-name history is a map of what is worth
+    # stealing.
     STATE.parent.mkdir(parents=True, exist_ok=True)
     tmp = STATE.with_suffix(".tmp")
-    tmp.write_text(json.dumps(state))
+    descriptor = os.open(tmp, os.O_CREAT | os.O_TRUNC | os.O_WRONLY, 0o600)
+    with os.fdopen(descriptor, "w") as handle:
+        handle.write(json.dumps(state))
+    os.chmod(tmp, 0o600)
     tmp.replace(STATE)
 
 
@@ -121,10 +143,12 @@ def subjects_of(entry: dict) -> list[str]:
     ]
 
 
-def notify(title: str, message: str) -> None:
+def notify(title: str, message: str) -> bool:
+    """Raise the banner. Returns whether it was handed to the system - a caller
+    that records "warned" must not do so on a failed osascript."""
     if DRY_RUN:
         print(f"NOTIFY\t{title}\t{message}")
-        return
+        return True
 
     # osascript keeps this dependency-free. Quotes and backslashes are the only
     # metacharacters inside an AppleScript string literal, and a subject comes
@@ -137,6 +161,8 @@ def notify(title: str, message: str) -> None:
         subprocess.run(["osascript", "-e", script], check=True, capture_output=True)
     except (OSError, subprocess.CalledProcessError) as error:
         warn(f"notification failed: {error}")
+        return False
+    return True
 
 
 class SingleRun:
@@ -181,7 +207,9 @@ class SingleRun:
                 pass
 
 
-def read_new_entries(offset: int, after: datetime | None) -> tuple[list[tuple[dict, datetime]], int]:
+def read_new_entries(
+    offset: int, after: datetime | None, now: datetime
+) -> tuple[list[tuple[dict, datetime]], int]:
     """Entries written since the last run, with the log's size. Two guards,
     because either can be wrong on its own: the byte offset misses nothing but
     resets to zero when the log rotates, and the timestamp survives rotation
@@ -202,8 +230,13 @@ def read_new_entries(offset: int, after: datetime | None) -> tuple[list[tuple[di
                 continue
             moment = parse_time(entry.get("timestamp", ""))
             if moment is None:
-                continue
-            if after is not None and moment < after:
+                # An entry that names a secret is not dropped for a bad clock;
+                # it is counted as of now. Only a line past the offset gets
+                # here, so it cannot be an old one seen again.
+                if not subjects_of(entry):
+                    continue
+                moment = now
+            elif after is not None and moment < after:
                 continue
             entries.append((entry, moment))
     return entries, size
@@ -217,24 +250,25 @@ def main() -> int:
         return 0
 
     now = datetime.now(timezone.utc)
-    window = timedelta(days=int(config["rare_window_days"]))
-    catchup = now - timedelta(minutes=int(config["catchup_minutes"]))
-    rare_threshold = int(config["rare_threshold"])
+    window = timedelta(days=config["rare_window_days"])
+    rare_threshold = config["rare_threshold"]
 
     with SingleRun(STATE) as lock:
         if not lock.held:
             return 0
 
         state = load_state()
-        first_run = "offset" not in state
+        # No history means no baseline - whether the file is missing or was
+        # written by the earlier version that kept none. Either way the first
+        # run must only record what is routine, never announce it.
+        history = state.get("history")
+        first_run = not isinstance(history, dict)
+        if first_run:
+            history = {}
         offset = state.get("offset", 0)
         if not isinstance(offset, int) or offset < 0:
             offset = 0
         last_seen = parse_time(state.get("last_seen", ""))
-
-        history = state.get("history")
-        if not isinstance(history, dict):
-            history = {}
         requests = state.get("requests")
         if not isinstance(requests, list):
             requests = []
@@ -246,11 +280,13 @@ def main() -> int:
             # let `last_seen` keep the entries it already counted out.
             if LOG.stat().st_size < offset:
                 offset = 0
-            entries, size = read_new_entries(0 if first_run else offset, last_seen)
+            entries, size = read_new_entries(0 if first_run else offset, last_seen, now)
         except OSError as error:
             warn(f"log unreadable: {error}")
             return 0
 
+        # Everything new is reported, however old: a run that was asleep with
+        # the Mac must not consume the one request that happened meanwhile.
         rare: dict[str, int] = {}
         for entry, moment in entries:
             requests.append(stamp(moment))
@@ -260,12 +296,8 @@ def main() -> int:
                 before = len(seen)
                 seen.append(stamp(moment))
                 history[subject] = seen
-                # The first run only builds the baseline. Without that, an
-                # install or a lost state file would announce a week of routine
-                # traffic as if every reference were new.
                 if (
                     not first_run
-                    and moment >= catchup
                     and entry.get("cacheKind") in NAMED_KINDS
                     and before < rare_threshold
                     and subject not in rare
@@ -283,31 +315,38 @@ def main() -> int:
         requests = [seen for seen in requests if seen >= hour_cut]
 
         if rare:
-            limit = int(config["max_named_subjects"])
-            names = sorted(rare)
-            body = ", ".join(names[:limit])
-            if len(names) > limit:
-                body += f" und {len(names) - limit} weitere"
-            days = int(config["rare_window_days"])
+            # Least-seen first, so a banner that has to cut the list cuts the
+            # routine end, not an alphabetical one. The full list goes to
+            # stdout, which launchd keeps in the notify log.
+            ordered = sorted(rare.items(), key=lambda item: (item[1], item[0]))
+            for subject, before in ordered:
+                print(f"RARE\t{before + 1}\t{subject}")
+            limit = config["max_named_subjects"]
+            parts = [f"{subject} ({before + 1}.)" for subject, before in ordered[:limit]]
+            body = ", ".join(parts)
+            if len(ordered) > limit:
+                body += f" und {len(ordered) - limit} weitere"
+            days = config["rare_window_days"]
             notify(
-                f"op-cache: {len(names)} seltene Abfrage" + ("n" if len(names) > 1 else ""),
-                f"{body} — unter {rare_threshold}x in {days} Tagen geholt",
+                f"op-cache: {len(ordered)} seltene Abfrage" + ("n" if len(ordered) > 1 else ""),
+                f"{body} — Abruf Nr. in {days} Tagen, Schwelle {rare_threshold}",
             )
 
-        rate_threshold = int(config["rate_threshold"])
+        rate_threshold = config["rate_threshold"]
         last_alert = parse_time(state.get("last_rate_alert", "")) or datetime.min.replace(
             tzinfo=timezone.utc
         )
-        cooldown = timedelta(minutes=int(config["rate_cooldown_minutes"]))
+        cooldown = timedelta(minutes=config["rate_cooldown_minutes"])
         if len(requests) > rate_threshold and now - last_alert >= cooldown:
-            notify(
+            delivered = notify(
                 "op-cache: ungewöhnlich viele Abfragen",
                 f"{len(requests)} Anfragen in der letzten Stunde (Schwelle {rate_threshold})",
             )
-            state["last_rate_alert"] = stamp(now)
+            if delivered:
+                state["last_rate_alert"] = stamp(now)
 
         if entries:
-            state["last_seen"] = entries[-1][1].isoformat().replace("+00:00", "Z")
+            state["last_seen"] = stamp(entries[-1][1])
         state["offset"] = size
         state["history"] = history
         state["requests"] = requests

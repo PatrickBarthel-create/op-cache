@@ -54,6 +54,13 @@ cold=$(stub cold 0 'prefetched vaults: 0 unlocked, 0 expired')
 out=$(run "$cold" OP_CACHE_WARM_START=0 OP_CACHE_WARM_END=24)
 check "cold cache runs unlock" $([[ "$out" == *"cache cold, running unlock"* ]] && print 1 || print 0) "$out"
 
+# 2b. A partial warm-up (one account skipped) is redone, not accepted.
+partial=$(stub partial 0 'prefetched vaults: 13 unlocked, 0 expired')
+out=$(run "$partial" OP_CACHE_WARM_START=0 OP_CACHE_WARM_END=24)
+check "partly warm cache is redone" $([[ "$out" == *"partly warm (13 of 17"* && "$out" == *"running unlock"* ]] && print 1 || print 0) "$out"
+out=$(run "$partial" OP_CACHE_WARM_START=0 OP_CACHE_WARM_END=24 OP_CACHE_WARM_MIN_VAULTS=13)
+check "expected vault count is configurable" $([[ "$out" == *"nothing to do"* ]] && print 1 || print 0) "$out"
+
 # 3. An unreadable status must NOT be read as cold: that would prompt.
 broken=$(stub broken 1 'irgendein Fehler')
 out=$(run "$broken" OP_CACHE_WARM_START=0 OP_CACHE_WARM_END=24)

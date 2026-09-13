@@ -269,6 +269,78 @@ check(
     len(case.run([entry(600, "op://E/routine/c"), entry(1, "op://E/nach-lock/c")])) == 1,
 )
 
+# ---- Findings of the adversarial review, each with its own case ----
+
+# 16. A request older than an hour is still reported: the watcher may have been
+#     asleep with the Mac, and that is the one it must not swallow.
+case = Case()
+history = case.baseline([entry(600, "op://E/routine/c")])
+check(
+    "an old unseen request is still named",
+    len(case.run(history + [entry(90, "op://E/verschlafen/c")])) == 1,
+)
+
+# 17. A state file from the version that kept no history is a first run.
+case = Case()
+case.state.write_text(json.dumps({"offset": 0, "last_run": "2026-01-01T00:00:00Z"}))
+check(
+    "a history-less state file starts a baseline",
+    case.run([entry(1, f"op://E/i{i}/c") for i in range(5)]) == [],
+)
+
+# 18. A wrongly typed config key falls back instead of crashing every minute.
+case = Case({"rate_threshold": "viele", "rare_threshold": 3})
+case.baseline([entry(600, "op://E/routine/c")])
+notifications = case.run([entry(600, "op://E/routine/c"), entry(1, "op://E/neu/c")])
+check("a wrongly typed config key falls back", len(notifications) == 1, str(notifications))
+
+# 19. The state mirrors the log's references and gets the log's mode.
+case = Case()
+case.run([entry(1, "op://E/x/c")])
+mode = case.state.stat().st_mode & 0o777
+check("state file is private", mode == 0o600, oct(mode))
+
+# 20. An entry with an unreadable timestamp that names a secret is not dropped.
+case = Case()
+history = case.baseline([entry(600, "op://E/routine/c")])
+line = json.loads(entry(1, "op://E/ohne-uhr/c"))
+line["timestamp"] = "kein-datum"
+notifications = case.run(history + [json.dumps(line)])
+check("a bad timestamp does not hide a request", len(notifications) == 1 and "ohne-uhr" in notifications[0], str(notifications))
+
+# 21. The banner says which request number this is, and lists least-seen first;
+#     the full list goes to stdout even when the banner is cut.
+case = Case({"max_named_subjects": 2})
+history = case.baseline([entry(600, "op://E/zwei/c"), entry(500, "op://E/zwei/c")])
+lines = history + [entry(3, "op://E/zwei/c"), entry(2, "op://E/null-b/c"), entry(1, "op://E/null-a/c")]
+target = case.log
+target.write_text("\n".join(lines) + "\n")
+environment = dict(os.environ)
+environment.update(
+    {
+        "OP_CACHE_AUDIT_LOG": str(target),
+        "OP_CACHE_NOTIFY_STATE": str(case.state),
+        "OP_CACHE_NOTIFY_CONFIG": str(case.config),
+    }
+)
+out = subprocess.run(
+    [sys.executable, str(TOOL), "--dry-run"], capture_output=True, text=True, env=environment
+).stdout
+banner = [l for l in out.splitlines() if l.startswith("NOTIFY")]
+rare_lines = [l for l in out.splitlines() if l.startswith("RARE")]
+check(
+    "banner lists least-seen first with the request number",
+    len(banner) == 1 and "op://E/null-a/c (1.)" in banner[0] and "op://E/null-b/c (1.)" in banner[0]
+    and "zwei" not in banner[0] and "und 1 weitere" in banner[0],
+    str(banner),
+)
+check(
+    "every rare subject reaches stdout, cut or not",
+    sorted(l.split("\t")[2] for l in rare_lines) == ["op://E/null-a/c", "op://E/null-b/c", "op://E/zwei/c"]
+    and any(l.startswith("RARE\t3\top://E/zwei/c") for l in rare_lines),
+    str(rare_lines),
+)
+
 print()
 if failures:
     print(f"{len(failures)} failed: {', '.join(failures)}")
