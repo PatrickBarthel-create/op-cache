@@ -68,6 +68,11 @@ DEFAULTS = {
 # whole point of this watcher, so it counts too.
 NAMED_KINDS = {"secret", "item-store", "metadata", "passthrough", "mutating"}
 
+# Bumped whenever the meaning of the stored history changes. A state written
+# by an older version is treated as no state at all: its history would be
+# incomplete for the new counting and every gap would read as a rare fetch.
+STATE_VERSION = 2
+
 
 def load_config() -> dict:
     config = dict(DEFAULTS)
@@ -134,13 +139,21 @@ def stamp(moment: datetime) -> str:
 
 def subjects_of(entry: dict) -> list[str]:
     secrets = entry.get("secrets")
-    if not isinstance(secrets, list):
-        return []
-    return [
-        secret["reference"]
-        for secret in secrets
-        if isinstance(secret, dict) and isinstance(secret.get("reference"), str)
-    ]
+    if isinstance(secrets, list):
+        named = [
+            secret["reference"]
+            for secret in secrets
+            if isinstance(secret, dict) and isinstance(secret.get("reference"), str)
+        ]
+        if named:
+            return named
+    # Entries written before the proxy named its subject carry only the
+    # subcommand. Counting it the way the proxy now does keeps `item list` and
+    # `whoami` routine across the upgrade instead of new three times over.
+    subcommand = entry.get("subcommand")
+    if entry.get("event") == "proxy" and isinstance(subcommand, str) and subcommand:
+        return [subcommand]
+    return []
 
 
 def notify(title: str, message: str) -> bool:
@@ -262,9 +275,10 @@ def main() -> int:
         # written by the earlier version that kept none. Either way the first
         # run must only record what is routine, never announce it.
         history = state.get("history")
-        first_run = not isinstance(history, dict)
+        first_run = not isinstance(history, dict) or state.get("version") != STATE_VERSION
         if first_run:
             history = {}
+            state = {}
         offset = state.get("offset", 0)
         if not isinstance(offset, int) or offset < 0:
             offset = 0
@@ -337,7 +351,9 @@ def main() -> int:
             tzinfo=timezone.utc
         )
         cooldown = timedelta(minutes=config["rate_cooldown_minutes"])
-        if len(requests) > rate_threshold and now - last_alert >= cooldown:
+        # The baseline run is silent on this too; a burst that was already
+        # under way when the watcher started is reported on the next tick.
+        if not first_run and len(requests) > rate_threshold and now - last_alert >= cooldown:
             delivered = notify(
                 "op-cache: ungewöhnlich viele Abfragen",
                 f"{len(requests)} Anfragen in der letzten Stunde (Schwelle {rate_threshold})",
@@ -347,6 +363,7 @@ def main() -> int:
 
         if entries:
             state["last_seen"] = stamp(entries[-1][1])
+        state["version"] = STATE_VERSION
         state["offset"] = size
         state["history"] = history
         state["requests"] = requests

@@ -38,7 +38,7 @@ stub() {  # stub <name> <exit> <output...>
 
 run() {  # run <op-cache-stub> [env assignments...]
     local bin=$1; shift
-    env OP_CACHE_BIN="$bin" TMPDIR="$WORK/tmp" "$@" "$TOOL" 2>&1
+    env OP_CACHE_WARM_SCREEN_LOCKED_CMD=false OP_CACHE_BIN="$bin" TMPDIR="$WORK/tmp" "$@" "$TOOL" 2>&1
     return $?
 }
 
@@ -56,6 +56,7 @@ check "cold cache runs unlock" $([[ "$out" == *"cache cold, running unlock"* ]] 
 
 # 2b. A partial warm-up (one account skipped) is redone, not accepted.
 partial=$(stub partial 0 'prefetched vaults: 13 unlocked, 0 expired')
+rm -f "$WORK/tmp/op-cache-warm.last-attempt"
 out=$(run "$partial" OP_CACHE_WARM_START=0 OP_CACHE_WARM_END=24)
 check "partly warm cache is redone" $([[ "$out" == *"partly warm (13 of 17"* && "$out" == *"running unlock"* ]] && print 1 || print 0) "$out"
 out=$(run "$partial" OP_CACHE_WARM_START=0 OP_CACHE_WARM_END=24 OP_CACHE_WARM_MIN_VAULTS=13)
@@ -77,19 +78,62 @@ out=$(run "$cold" OP_CACHE_WARM_START=23 OP_CACHE_WARM_END=24)
 check "outside hours skips" $([[ "$out" == *"outside 23-24h"* && "$out" != *"unlock"* ]] && print 1 || print 0) "$out"
 
 # 5. A missing op-cache is an error, not a silent pass.
-out=$(env OP_CACHE_BIN=/gibts/nicht TMPDIR="$WORK/tmp" "$TOOL" 2>&1)
+out=$(env OP_CACHE_WARM_SCREEN_LOCKED_CMD=false OP_CACHE_BIN=/gibts/nicht TMPDIR="$WORK/tmp" "$TOOL" 2>&1)
 rc=$?
 check "missing op-cache fails loudly" $([[ "$out" == *"not found"* && $rc -ne 0 ]] && print 1 || print 0) "rc=$rc $out"
 
-# 6. A held lock defers; a stale one is broken.
+# 6. A lock whose holder is alive defers however old it is; a dead holder's
+#    lock ages out; a fresh lock of a dead holder is still respected.
 mkdir -p "$WORK/tmp/op-cache-warm.lock"
+sleep 300 &
+alive=$!
+print -r -- "$alive" > "$WORK/tmp/op-cache-warm.lock/pid"
+touch -t 202601010000 "$WORK/tmp/op-cache-warm.lock"
 out=$(run "$cold" OP_CACHE_WARM_START=0 OP_CACHE_WARM_END=24)
-check "held lock defers" $([[ "$out" == *"holds the lock"* && "$out" != *"unlock"* ]] && print 1 || print 0) "$out"
+check "live holder keeps an old lock" $([[ "$out" == *"pid $alive) holds the lock"* && "$out" != *"running unlock"* ]] && print 1 || print 0) "$out"
+kill "$alive" 2>/dev/null; wait "$alive" 2>/dev/null
+
+print -r -- 999999 > "$WORK/tmp/op-cache-warm.lock/pid"
+touch "$WORK/tmp/op-cache-warm.lock"
+out=$(run "$cold" OP_CACHE_WARM_START=0 OP_CACHE_WARM_END=24)
+check "fresh lock of a dead holder waits" $([[ "$out" == *"waiting for it to age out"* && "$out" != *"running unlock"* ]] && print 1 || print 0) "$out"
 
 touch -t 202601010000 "$WORK/tmp/op-cache-warm.lock"
 out=$(run "$cold" OP_CACHE_WARM_START=0 OP_CACHE_WARM_END=24)
-check "stale lock is broken" $([[ "$out" == *"breaking a stale lock"* && "$out" == *"running unlock"* ]] && print 1 || print 0) "$out"
+check "stale lock of a dead holder is broken" $([[ "$out" == *"breaking a stale lock"* && "$out" == *"running unlock"* ]] && print 1 || print 0) "$out"
 check "lock is released afterwards" $([[ ! -d "$WORK/tmp/op-cache-warm.lock" ]] && print 1 || print 0)
+
+# 7. A partial warm-up is retried only after the retry interval; a cold cache always.
+rm -f "$WORK/tmp/op-cache-warm.last-attempt"
+out=$(run "$partial" OP_CACHE_WARM_START=0 OP_CACHE_WARM_END=24)
+check "first partial retry runs" $([[ "$out" == *"running unlock"* ]] && print 1 || print 0) "$out"
+out=$(run "$partial" OP_CACHE_WARM_START=0 OP_CACHE_WARM_END=24)
+check "second partial retry within the interval waits" $([[ "$out" == *"last attempt"* && "$out" != *"running unlock"* ]] && print 1 || print 0) "$out"
+out=$(run "$cold" OP_CACHE_WARM_START=0 OP_CACHE_WARM_END=24)
+check "a cold cache ignores the retry interval" $([[ "$out" == *"running unlock"* ]] && print 1 || print 0) "$out"
+out=$(run "$partial" OP_CACHE_WARM_START=0 OP_CACHE_WARM_END=24 OP_CACHE_WARM_PARTIAL_RETRY=0)
+check "retry interval is configurable" $([[ "$out" == *"running unlock"* ]] && print 1 || print 0) "$out"
+
+# 8. The lock names the unlock child, and a TERM to the script ends it.
+slow=$(stub slow 0 'prefetched vaults: 0 unlocked, 0 expired')
+{
+    print '#!/bin/sh'
+    print 'if [ "$1" = "status" ]; then echo "prefetched vaults: 0 unlocked, 0 expired"; exit 0; fi'
+    print 'sleep 60'
+} > "$slow"
+env OP_CACHE_WARM_SCREEN_LOCKED_CMD=false OP_CACHE_BIN="$slow" TMPDIR="$WORK/tmp" OP_CACHE_WARM_START=0 OP_CACHE_WARM_END=24 OP_CACHE_WARM_PARTIAL_RETRY=0 "$TOOL" >/dev/null 2>&1 &
+script=$!
+sleep 1
+holder=$(cat "$WORK/tmp/op-cache-warm.lock/pid" 2>/dev/null)
+check "lock names the unlock child, not the script" $([[ -n "$holder" && "$holder" != "$script" ]] && kill -0 "$holder" 2>/dev/null && print 1 || print 0) "holder=$holder script=$script"
+kill -TERM "$script" 2>/dev/null; wait "$script" 2>/dev/null
+sleep 1
+check "TERM to the script ends the child" $(kill -0 "$holder" 2>/dev/null && print 0 || print 1) "holder=$holder"
+check "lock is gone after TERM" $([[ ! -d "$WORK/tmp/op-cache-warm.lock" ]] && print 1 || print 0)
+
+# 9. A locked screen skips, whatever the cache says.
+out=$(env OP_CACHE_WARM_SCREEN_LOCKED_CMD=true OP_CACHE_BIN="$cold" TMPDIR="$WORK/tmp" OP_CACHE_WARM_START=0 OP_CACHE_WARM_END=24 "$TOOL" 2>&1)
+check "locked screen skips" $([[ "$out" == *"screen locked"* && "$out" != *"running unlock"* ]] && print 1 || print 0) "$out"
 
 print
 if (( failures )); then

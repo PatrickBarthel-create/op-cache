@@ -128,3 +128,15 @@ import Testing
     #expect(ProxyClassifier.classify(["item", "get", "GitHub"]).subcommand == "item get")
     #expect(ProxyClassifier.classify(["something", "new"]).subcommand == "")
 }
+
+@Test func neverNamesAnAssignmentHiddenInAFlagOrAMistypedCall() {
+    // Findings of the second adversarial round.
+    #expect(ProxyClassifier.classify(["--vault", "password=geheim", "item", "get", "X"]).subject == "item get")
+    #expect(ProxyClassifier.classify(["item", "get", "X", "--vault", "password=geheim"]).subject == "item get")
+    #expect(ProxyClassifier.classify(["item", "get", "--vault=password=geheim", "X"]).subject == "item get")
+    #expect(ProxyClassifier.classify(["item", "get", "--otp", "--vault", "password=geheim", "X"]).subject == "item get")
+    // `-o file` is a flag value, not the reference.
+    #expect(ProxyClassifier.classify(["read", "-o", "geheimpfad", "op://x/y/z"]).subject == "op://x/y/z")
+    // `read` without a reference is a mistake and names nothing but itself.
+    #expect(ProxyClassifier.classify(["read", "geheimwert"]).subject == "read")
+}

@@ -182,6 +182,9 @@ public enum ProxyClassifier {
             "--account", "--vault", "--fields", "--format", "--session",
             "--cache-key", "--config", "--iso-timestamps", "--encoding",
             "--out-file", "--file-mode", "--categories", "--tags", "--include-archive",
+            // Short forms op documents. `-o file` before the reference would
+            // otherwise make the file name the subject.
+            "-o", "-i", "-t", "-c",
         ].contains(flag)
     }
 
@@ -232,10 +235,17 @@ public enum ProxyClassifier {
         guard operands.count > verbCount else { return nil }
         let operand = operands[verbCount]
         if operand.hasPrefix("op://") { return operand }
+        // `read` takes references only. Anything else there is a mistake, and
+        // a mistyped command line is the one most likely to carry something
+        // that was meant for another program.
+        if operands.first == "read" { return nil }
         // `field=value` is an assignment, and its right-hand side is a secret
-        // being written. Never recorded, whatever position it appears in.
+        // being written. Never recorded, whatever position it appears in -
+        // including as the value of `--vault`, where op would reject it but
+        // the log would not.
         if operand.contains("=") { return nil }
         guard let vault else { return operand }
+        if vault.contains("=") { return nil }
         return "\(vault)/\(operand)"
     }
 

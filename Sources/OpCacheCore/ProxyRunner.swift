@@ -83,6 +83,11 @@ public struct ProxyRunner: Sendable {
             if status == 0 {
                 meta.clear()
                 items.clear()
+                // The prefetch is gone now, and every call until it is rebuilt
+                // prompts. Ask the warm-up agent to rebuild it right away: the
+                // person who just edited 1Password is at the keyboard, which
+                // is the one moment an approval dialog costs nothing.
+                Self.requestWarmUp()
             }
             return status
 
@@ -185,6 +190,19 @@ public struct ProxyRunner: Sendable {
             expiresAt: now.addingTimeInterval(ttl)
         )
         try? keychain.put(cached, name: key, profile: Self.profileName)
+    }
+
+    /// Kicks the `dev.peter.op-cache.warm` LaunchAgent if it is installed.
+    /// Best effort and silent: a machine without the agent just prompts on the
+    /// next call, as it did before.
+    static func requestWarmUp() {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+        process.arguments = ["kickstart", "gui/\(getuid())/dev.peter.op-cache.warm"]
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        try? process.run()
+        process.waitUntilExit()
     }
 
     // MARK: - Output and audit

@@ -25,6 +25,9 @@ STALE_LOCK_SECONDS="${OP_CACHE_WARM_STALE_LOCK:-1800}"
 # Vaults across both accounts (13 + 4, measured 13.09.2026). Fewer than this
 # means one account did not warm.
 MIN_VAULTS="${OP_CACHE_WARM_MIN_VAULTS:-17}"
+# A partial warm-up is retried no more often than this (6h).
+PARTIAL_RETRY_SECONDS="${OP_CACHE_WARM_PARTIAL_RETRY:-21600}"
+RETRY_STAMP="${TMPDIR:-/tmp}/op-cache-warm.last-attempt"
 
 log() { print -r -- "$(date '+%Y-%m-%d %H:%M:%S') $*"; }
 
@@ -36,28 +39,46 @@ if (( hour < START_HOUR || hour >= END_HOUR )); then
     exit 0
 fi
 
-if ioreg -n Root -d1 -a 2>/dev/null | grep -q 'CGSSessionScreenIsLocked'; then
+screen_locked() {
+    # Overridable so the tests can run on a locked or unlocked machine alike;
+    # the real check is the CoreGraphics session flag.
+    if [[ -n "${OP_CACHE_WARM_SCREEN_LOCKED_CMD:-}" ]]; then
+        eval "$OP_CACHE_WARM_SCREEN_LOCKED_CMD"
+        return
+    fi
+    ioreg -n Root -d1 -a 2>/dev/null | grep -q 'CGSSessionScreenIsLocked'
+}
+
+if screen_locked; then
     log "screen locked, skipping"
     exit 0
 fi
 
 # One warm-up at a time: the unlock takes minutes and the timer fires hourly.
+# The lock names its holder, and a holder that is still alive keeps it however
+# old it is - an approval dialog left open for an hour is still one dialog, and
+# a second unlock beside it would make it two. Only a dead holder's lock is
+# broken, and only once it is old enough that a killed run is the likely cause.
 if ! mkdir "$LOCK" 2>/dev/null; then
-    # A run killed mid-unlock leaves its lock behind. Without this the cache
-    # would never be warmed again, and nothing would say so.
-    age=$(( $(date +%s) - $(stat -f %m "$LOCK" 2>/dev/null || date +%s) ))
-    if (( age < STALE_LOCK_SECONDS )); then
-        log "another warm-up holds the lock (${age}s), skipping"
+    holder=$(cat "$LOCK/pid" 2>/dev/null)
+    if [[ -n "$holder" ]] && kill -0 "$holder" 2>/dev/null; then
+        log "another warm-up (pid $holder) holds the lock, skipping"
         exit 0
     fi
-    log "breaking a stale lock (${age}s old)"
-    rmdir "$LOCK" 2>/dev/null
+    age=$(( $(date +%s) - $(stat -f %m "$LOCK" 2>/dev/null || date +%s) ))
+    if (( age < STALE_LOCK_SECONDS )); then
+        log "lock held by a finished run (${age}s), waiting for it to age out"
+        exit 0
+    fi
+    log "breaking a stale lock (${age}s old, holder ${holder:-unknown} gone)"
+    rm -f "$LOCK/pid"; rmdir "$LOCK" 2>/dev/null
     if ! mkdir "$LOCK" 2>/dev/null; then
         log "lock still held after breaking it, skipping"
         exit 0
     fi
 fi
-trap 'rmdir "$LOCK" 2>/dev/null' EXIT INT TERM
+print -r -- $$ > "$LOCK/pid"
+trap 'rm -f "$LOCK/pid"; rmdir "$LOCK" 2>/dev/null' EXIT INT TERM
 
 # Not named `status`: zsh reserves it as a read-only alias for `$?`, and the
 # assignment fails at run time rather than at parse time.
@@ -84,11 +105,29 @@ if (( unlocked >= MIN_VAULTS )); then
 fi
 
 if (( unlocked > 0 )); then
+    # A partial warm-up means one account did not approve. Retrying every hour
+    # would turn a vault that simply went away into an hourly dialog, so a
+    # retry waits; a fully cold cache is always worth the attempt.
+    last=$(cat "$RETRY_STAMP" 2>/dev/null)
+    since=$(( $(date +%s) - ${last:-0} ))
+    if (( since < PARTIAL_RETRY_SECONDS )); then
+        log "cache partly warm ($unlocked of $MIN_VAULTS vaults), last attempt ${since}s ago, waiting"
+        exit 0
+    fi
     log "cache partly warm ($unlocked of $MIN_VAULTS vaults), running unlock --all --ttl $TTL"
 else
     log "cache cold, running unlock --all --ttl $TTL"
 fi
-if "$OP_CACHE" unlock --all --ttl "$TTL"; then
+date +%s > "$RETRY_STAMP"
+
+# The unlock runs as a child whose pid is what the lock names: when this
+# script is killed, the lock must still say who is actually holding the
+# dialog open, and a TERM here ends the child rather than orphaning it.
+"$OP_CACHE" unlock --all --ttl "$TTL" &
+child=$!
+print -r -- "$child" > "$LOCK/pid"
+trap 'kill -TERM "$child" 2>/dev/null; rm -f "$LOCK/pid"; rmdir "$LOCK" 2>/dev/null' EXIT INT TERM
+if wait "$child"; then
     log "warm: $("$OP_CACHE" status _items | head -1)"
 else
     code=$?

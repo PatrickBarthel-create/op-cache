@@ -255,7 +255,12 @@ vaults than expected (`OP_CACHE_WARM_MIN_VAULTS`, default 17 - both accounts as
 measured here), never while the screen is locked, and never outside
 `OP_CACHE_WARM_START`-`OP_CACHE_WARM_END` (7-23). An unreadable status is an
 error, not a cold cache: a crashed status command must not turn into a
-biometric prompt. The cost is one approval per account every three days.
+biometric prompt. The cost is one approval per account every three days -
+plus one after every write to 1Password through `op` (`item edit`, `item
+create`, …): a write drops the prefetch, because a renamed or rotated item
+must not be answered from a stale copy, and the proxy then kicks the agent so
+the rebuild happens while you are still at the keyboard. A partial warm-up
+(one account did not approve) is retried at most every six hours.
 
 `op-cache-notify` runs every minute and raises a macOS notification for:
 

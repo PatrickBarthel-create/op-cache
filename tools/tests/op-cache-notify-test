@@ -341,6 +341,41 @@ check(
     str(rare_lines),
 )
 
+
+# ---- Findings of the second adversarial round ----
+
+# 22. A state written by an older version (history present, no version) is a
+#     first run: its history is shorter than the week and would raise false alarms.
+case = Case()
+case.state.write_text(json.dumps({"offset": 0, "history": {"op://E/x/c": []}}))
+check(
+    "a versionless state starts a baseline",
+    case.run([entry(1, f"op://E/i{i}/c") for i in range(5)]) == [],
+)
+check("the state now carries its version", json.loads(case.state.read_text()).get("version") == 2)
+
+# 23. The baseline run is silent on bursts too; the next tick reports one.
+case = Case({"rare_threshold": 0, "rate_threshold": 50})
+lines = [entry(30, f"op://E/i{i}/c") for i in range(60)]
+first = case.run(lines)
+second = case.run(lines + [entry(0.5, "op://E/i0/c")])
+check("baseline run does not warn about a burst", first == [], str(first))
+check("the next tick does", any("Stunde" in n for n in second), str(second))
+
+# 24. Entries from before the proxy named its subject count by subcommand, so
+#     `item list` is routine across the upgrade instead of new.
+case = Case()
+old = []
+for minutes in (600, 500, 400):
+    line = json.loads(entry(minutes, None, kind="metadata"))
+    line["subcommand"] = "item list"
+    old.append(json.dumps(line))
+case.baseline(old)
+check(
+    "old subcommand-only entries make the subcommand routine",
+    case.run(old + [entry(1, "item list", kind="metadata")]) == [],
+)
+
 print()
 if failures:
     print(f"{len(failures)} failed: {', '.join(failures)}")
