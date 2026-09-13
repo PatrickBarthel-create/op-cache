@@ -85,6 +85,26 @@ check "no-vaults account is marked" $([[ "$mark" == *"momento-kuechen.1password.
 check "both dropped accounts are in the marker" $([[ "$mark" == *"skipped strategie-fm.1password.eu"* ]] && print 1 || print 0) "$mark"
 check "a cold partial says the next tick retries" $([[ "$out" == *"one more try on the next tick"* ]] && print 1 || print 0) "$out"
 
+# 2d. A retry unlocks only the accounts that dropped out - every other account
+#     would cost its own approval for nothing.
+argsfile="$WORK/args"
+recorder="$WORK/recorder"
+{
+    print '#!/bin/sh'
+    print "printf '%s\\n' \"\$*\" >> '$argsfile'"
+    print 'if [ "$1" = "status" ]; then echo "prefetched vaults: 8 unlocked, 0 expired"; exit 0; fi'
+    print 'echo "Unlocked 122 item(s) from 4 vault(s) in 2 account(s)"'
+} > "$recorder"
+/bin/chmod +x "$recorder"
+rm -f "$argsfile" "$WORK/tmp/op-cache-warm.last-attempt"
+print -r -- "skipped strategie-fm.1password.eu;momento-kuechen.1password.com: no vaults visible" > "$WORK/tmp/op-cache-warm.partial"
+out=$(run "$recorder" OP_CACHE_WARM_START=0 OP_CACHE_WARM_END=24)
+check "retry passes only the dropped accounts" $(grep -q -- '^unlock --all --account strategie-fm.1password.eu,momento-kuechen.1password.com --ttl' "$argsfile" && print 1 || print 0) "$(cat "$argsfile")"
+check "a complete retry clears the marker" $([[ ! -f "$WORK/tmp/op-cache-warm.partial" ]] && print 1 || print 0)
+rm -f "$argsfile"
+out=$(run "$recorder" OP_CACHE_WARM_START=0 OP_CACHE_WARM_END=24)
+check "a warm cache without a marker sends nothing" $([[ ! -f "$argsfile" || $(grep -c '^unlock' "$argsfile") -eq 0 ]] && print 1 || print 0)
+
 # 3. An unreadable status must NOT be read as cold: that would prompt.
 broken=$(stub broken 1 'irgendein Fehler')
 out=$(run "$broken" OP_CACHE_WARM_START=0 OP_CACHE_WARM_END=24)

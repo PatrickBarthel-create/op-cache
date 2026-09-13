@@ -119,12 +119,18 @@ if (( unlocked > 0 )); then
         log "cache partly warm ($unlocked vaults; $(cat "$PARTIAL_MARK")), last attempt ${since}s ago, waiting"
         exit 0
     fi
-    log "cache partly warm ($unlocked vaults; $(cat "$PARTIAL_MARK")), running unlock --all --ttl $TTL"
+    # Only the accounts that dropped out are retried: every account in an
+    # unfiltered unlock costs its own approval, and the warm ones need none.
+    # The marker holds their URLs, which `--account` accepts.
+    only=$(tr ';' '\n' < "$PARTIAL_MARK" | sed -E 's/^skipped //; s/: no vaults visible$//' | paste -sd, -)
+    account_filter=(--account "$only")
+    log "cache partly warm ($unlocked vaults; $(cat "$PARTIAL_MARK")), running unlock --all --account $only --ttl $TTL"
     # Only a retry of a partial warm-up starts the wait. A cold run that ends
     # short (a write to 1Password wiped the vaults it had already prefetched)
     # gets one prompt retry on the next tick before the six hours apply.
     date +%s > "$RETRY_STAMP"
 else
+    account_filter=()
     log "cache cold, running unlock --all --ttl $TTL"
     rm -f "$RETRY_STAMP"
 fi
@@ -132,7 +138,7 @@ fi
 # The unlock runs as a child whose pid is what the lock names: when this
 # script is killed, the lock must still say who is actually holding the
 # dialog open, and a TERM here ends the child rather than orphaning it.
-"$OP_CACHE" unlock --all --ttl "$TTL" > "$UNLOCK_OUT" 2>&1 &
+"$OP_CACHE" unlock --all "${account_filter[@]}" --ttl "$TTL" > "$UNLOCK_OUT" 2>&1 &
 child=$!
 print -r -- "$child" > "$LOCK/pid"
 trap 'kill -TERM "$child" 2>/dev/null; rm -f "$LOCK/pid"; rmdir "$LOCK" 2>/dev/null' EXIT INT TERM

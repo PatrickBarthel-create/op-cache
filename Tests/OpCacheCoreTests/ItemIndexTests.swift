@@ -123,3 +123,17 @@ private func makeIndex() -> ItemIndex {
     try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
     #expect(ItemIndex.load(from: url) == nil)
 }
+
+@Test func aNarrowedPrefetchKeepsTheOtherAccountsInTheIndex() {
+    // Tenth adversarial round: a one-account retry used to replace the index.
+    let everlast = IndexedAccount(url: "everlastconsultinggmbh.1password.eu", aliases: ["everlast"], vaults: [])
+    let strategie = IndexedAccount(url: "strategie-fm.1password.eu", aliases: ["strategie"], vaults: [])
+    let full = ItemIndex(builtAt: Date(), accounts: [everlast, strategie])
+    let refreshed = IndexedAccount(url: "strategie-fm.1password.eu", aliases: ["strategie", "neu"], vaults: [])
+
+    let merged = ItemIndex.merging(existing: full, fresh: [refreshed])
+    #expect(merged.accounts.map(\.url).sorted() == ["everlastconsultinggmbh.1password.eu", "strategie-fm.1password.eu"])
+    #expect(merged.accounts.first { $0.url == "strategie-fm.1password.eu" }?.aliases == ["strategie", "neu"])
+    // No previous index: the fresh accounts alone.
+    #expect(ItemIndex.merging(existing: nil, fresh: [everlast]).accounts.count == 1)
+}

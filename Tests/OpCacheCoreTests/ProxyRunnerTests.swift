@@ -65,6 +65,13 @@ import Testing
     // A lower-case seed at a seed length is still refused.
     #expect(!ProxyRunner.isCacheable("jbswy3dpehpk3pxpjbswy3dpehpk3pxp"))
     #expect(!ProxyRunner.isCacheable("jbswy3dpehpk3pxp"))
-    // 26 characters with digits: an ID, not a seed.
-    #expect(ProxyRunner.isCacheable("26ykszxp7l7b4fov5lcvoiiflm"))
+    // A bare 26-character lower-case run outside the ID line is a seed
+    // (128 bits are 26 base32 characters): refused, whatever its length.
+    #expect(!ProxyRunner.isCacheable("26ykszxp7l7b4fov5lcvoiiflm"))
+    #expect(!ProxyRunner.isCacheable("jbsw y3dp ehpk 3pxp jbsw y3dp ehpk"))
+    #expect(!ProxyRunner.isCacheable("jbswy3dpehpk3pxpjbsw======"))
+    // The same run on the ID line of the table format is the item's ID.
+    #expect(ProxyRunner.isCacheable("ID:          26ykszxp7l7b4fov5lcvoiiflm\nTitle:       X\n"))
+    // In JSON the ID sits in quotes and is never a bare run.
+    #expect(ProxyRunner.isCacheable(#"{"id":"26ykszxp7l7b4fov5lcvoiiflm","fields":[{"type":"CONCEALED","value":"pw"}]}"#))
 }

@@ -95,6 +95,19 @@ public struct ItemIndex: Codable, Sendable, Equatable {
         self.accounts = accounts
     }
 
+    /// The index after a prefetch of `fresh`: those accounts replace their
+    /// previous entries, every other account is kept. A run narrowed with
+    /// `--account` must not drop the rest of the index, or their items become
+    /// unreachable by reference while still sitting in the Keychain.
+    /// Measured on 13.09.2026: after a one-account retry the index listed
+    /// "1 account(s)" and the other account's 982 items missed the cache.
+    public static func merging(existing: ItemIndex?, fresh: [IndexedAccount]) -> ItemIndex {
+        let retained = (existing?.accounts ?? []).filter { old in
+            !fresh.contains { $0.url == old.url }
+        }
+        return ItemIndex(builtAt: Date(), accounts: fresh + retained)
+    }
+
     // MARK: - Resolution
 
     /// Every item matching a reference, optionally narrowed by `--account`.

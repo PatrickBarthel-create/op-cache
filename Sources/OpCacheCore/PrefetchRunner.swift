@@ -125,7 +125,13 @@ public struct PrefetchRunner: Sendable {
             )
         }
 
-        try ItemIndex(builtAt: Date(), accounts: indexed).save()
+        // Merge, do not replace: a run narrowed with `--account` (the warm-up
+        // agent retries only the account that skipped) must not drop the other
+        // accounts from the index, or their prefetched items become
+        // unreachable by reference while still sitting in the Keychain -
+        // measured on 13.09.2026: after a one-account retry the index listed
+        // "1 account(s)" and the other 982 items missed the cache.
+        try ItemIndex.merging(existing: ItemIndex.load(), fresh: indexed).save()
 
         audit.record(
             AuditEvent(
