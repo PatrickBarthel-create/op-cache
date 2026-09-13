@@ -410,6 +410,37 @@ out = subprocess.run(
 ).stdout
 check("a burst is recorded on stdout", any(l.startswith("BURST\t60\t50") for l in out.splitlines()), out)
 
+# ---- Findings of the fourth adversarial round ----
+
+# 27. A late writer whose timestamp predates the last seen one is still named
+#     on an intact log; only a rotation applies the timestamp filter.
+case = Case()
+case.baseline([entry(600, "op://A/routine/c")])
+lines = [entry(600, "op://A/routine/c"), entry(5, "op://B/neu/c")]
+case.run(lines)
+late = lines + [entry(7, "op://C/nachzuegler/c")]
+notifications = case.run(late)
+check("a late writer with an older stamp is named", len(notifications) == 1 and "nachzuegler" in notifications[0], str(notifications))
+
+# 28. The prefetch unlock names itself.
+case = Case()
+case.baseline([entry(600, "op://A/routine/c")])
+prefetch = json.loads(entry(1, None, kind="item-store"))
+prefetch["event"] = "unlock"
+prefetch["subcommand"] = "prefetch"
+notifications = case.run([entry(600, "op://A/routine/c"), json.dumps(prefetch)])
+check("a prefetch unlock is named", len(notifications) == 1 and "prefetch" in notifications[0], str(notifications))
+
+# 29. Control characters in a subject cannot forge a second stdout record.
+case = Case()
+case.baseline([entry(600, "op://A/routine/c")])
+case.log.write_text("\n".join([entry(600, "op://A/routine/c"), entry(1, "op://X/a\tRARE\t9\tgefaelscht")]) + "\n")
+environment = dict(os.environ)
+environment.update({"OP_CACHE_AUDIT_LOG": str(case.log), "OP_CACHE_NOTIFY_STATE": str(case.state), "OP_CACHE_NOTIFY_CONFIG": str(case.config)})
+out = subprocess.run([sys.executable, str(TOOL), "--dry-run"], capture_output=True, text=True, env=environment).stdout
+rare_lines = [l for l in out.splitlines() if l.startswith("RARE")]
+check("a tab in a subject stays inside its field", len(rare_lines) == 1 and rare_lines[0].count("\t") == 2, str(rare_lines))
+
 print()
 if failures:
     print(f"{len(failures)} failed: {', '.join(failures)}")

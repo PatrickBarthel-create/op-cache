@@ -151,9 +151,18 @@ def subjects_of(entry: dict) -> list[str]:
     # subcommand. Counting it the way the proxy now does keeps `item list` and
     # `whoami` routine across the upgrade instead of new three times over.
     subcommand = entry.get("subcommand")
-    if entry.get("event") == "proxy" and isinstance(subcommand, str) and subcommand:
+    # The prefetch (`unlock --all`) is such an entry too: no references, only
+    # `subcommand: prefetch` - and it is the one call that touches everything.
+    if entry.get("event") in ("proxy", "unlock") and isinstance(subcommand, str) and subcommand:
         return [subcommand]
     return []
+
+
+def plain(subject: str) -> str:
+    """One line, one field: a subject with a tab or newline in it must not be
+    able to forge a second record in the stdout log."""
+    cleaned = "".join(" " if ch in "\t\n\r" or ord(ch) < 32 else ch for ch in subject)
+    return cleaned if cleaned.strip() else "(leer)"
 
 
 def reaches_a_secret(entry: dict) -> bool:
@@ -302,10 +311,15 @@ def main() -> int:
             # A log that shrank was rotated or truncated, and the byte offset
             # then points past its end: everything would be skipped and the
             # watcher would go quiet for good. Start from the front instead and
-            # let `last_seen` keep the entries it already counted out.
-            if LOG.stat().st_size < offset:
+            # let `last_seen` keep the entries it already counted out. Only
+            # then: on an intact log the offset alone is exact, and a timestamp
+            # filter would drop a late writer whose stamp predates its append.
+            rotated = LOG.stat().st_size < offset
+            if rotated:
                 offset = 0
-            entries, size = read_new_entries(0 if first_run else offset, last_seen, now)
+            entries, size = read_new_entries(
+                0 if first_run else offset, last_seen if rotated else None, now
+            )
         except OSError as error:
             warn(f"log unreadable: {error}")
             return 0
@@ -345,7 +359,7 @@ def main() -> int:
             # stdout, which launchd keeps in the notify log.
             ordered = sorted(rare.items(), key=lambda item: (item[1], item[0]))
             for subject, before in ordered:
-                print(f"RARE\t{before + 1}\t{subject}")
+                print(f"RARE\t{before + 1}\t{plain(subject)}")
             limit = config["max_named_subjects"]
             parts = [f"{subject} ({before + 1}.)" for subject, before in ordered[:limit]]
             body = ", ".join(parts)

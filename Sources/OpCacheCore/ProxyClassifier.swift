@@ -90,7 +90,12 @@ public enum ProxyClassifier {
     ]
 
     public static func classify(_ arguments: [String]) -> ClassifiedCall {
-        let verbs = leadingVerbs(arguments)
+        // Once the leading words form a known subcommand, what follows is an
+        // operand even if it happens to be spelled like a verb: an item named
+        // "edit" fetched with `item get edit` must not read as a write and
+        // wipe the cache.
+        let leading = leadingVerbs(arguments)
+        let verbs = knownVerbCount(leading).map { Array(leading.prefix($0)) } ?? leading
         let subcommand = verbs.joined(separator: " ")
 
         // Global help/version never reach the network and never prompt.
@@ -191,6 +196,9 @@ public enum ProxyClassifier {
             "--account", "--vault", "--fields", "--format", "--session",
             "--cache-key", "--config", "--encoding",
             "--out-file", "--file-mode", "--categories", "--tags",
+            // Filters of the listings. A value here that happens to be a
+            // command word would otherwise be read as a verb.
+            "--group", "--user", "--permission",
             // Short forms op documents. `-o file` before the reference would
             // otherwise make the file name the subject.
             "-o", "-i", "-t", "-c",
@@ -201,7 +209,7 @@ public enum ProxyClassifier {
     /// mistake, and a mistyped command line is exactly the one that carries
     /// something meant for another program.
     private static let operandlessCommands: Set<String> = [
-        "whoami", "account list", "vault list", "item list", "item template list",
+        "whoami", "account list", "account get", "vault list", "item list", "item template list",
         "user list", "group list", "events-api list",
     ]
 
@@ -276,6 +284,8 @@ public enum ProxyClassifier {
         if operandlessCommands.contains(operands.prefix(verbCount).joined(separator: " ")) {
             return nil
         }
+        // `user get --me` names the caller; an operand beside it is a mistake.
+        if arguments.contains("--me") { return nil }
         // `field=value` is an assignment, and its right-hand side is a secret
         // being written. Never recorded, whatever position it appears in -
         // including as the value of `--vault`, where op would reject it but

@@ -176,3 +176,22 @@ import Testing
     #expect(ProxyClassifier.classify(["read", "--session=TOKEN", "op://a/b/c"]).kind == .passthrough)
     #expect(ProxyClassifier.classify(["item", "get", "--session=TOKEN", "X"]).kind == .passthrough)
 }
+
+@Test func anOperandSpelledLikeAVerbIsNotAWrite() {
+    // Fourth adversarial round: an item named "edit", or a listing filtered by
+    // a group named "edit", read as a mutating call and wiped every cache.
+    #expect(ProxyClassifier.classify(["item", "get", "edit"]).kind == .secret)
+    #expect(ProxyClassifier.classify(["item", "get", "edit"]).subject == "edit")
+    #expect(ProxyClassifier.classify(["vault", "list", "--group", "edit"]).kind == .metadata)
+    #expect(ProxyClassifier.classify(["vault", "list", "--group", "edit"]).subcommand == "vault list")
+    #expect(ProxyClassifier.classify(["user", "list", "--vault", "delete"]).kind == .metadata)
+    // Real writes still count as such.
+    #expect(ProxyClassifier.classify(["item", "edit", "GitHub", "--title", "X"]).kind == .mutating)
+    #expect(ProxyClassifier.classify(["vault", "create", "New"]).kind == .mutating)
+}
+
+@Test func moreOperandlessCommandsNameNoStrayOperand() {
+    #expect(ProxyClassifier.classify(["account", "get", "geheimwert"]).subject == "account get")
+    #expect(ProxyClassifier.classify(["user", "get", "--me", "geheimwert"]).subject == "user get")
+    #expect(ProxyClassifier.classify(["user", "get", "someone@example.com"]).subject == "someone@example.com")
+}

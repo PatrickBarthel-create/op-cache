@@ -128,7 +128,15 @@ child=$!
 print -r -- "$child" > "$LOCK/pid"
 trap 'kill -TERM "$child" 2>/dev/null; rm -f "$LOCK/pid"; rmdir "$LOCK" 2>/dev/null' EXIT INT TERM
 if wait "$child"; then
-    log "warm: $("$OP_CACHE" status _items | head -1)"
+    after=$("$OP_CACHE" status _items | head -1)
+    log "warm: $after"
+    now_unlocked=$(print -r -- "$after" | sed -n 's/^prefetched vaults: \([0-9][0-9]*\) unlocked.*/\1/p')
+    # Still short after a full unlock: either an account did not approve, or a
+    # vault is gone and the expected count is stale. Both deserve a line,
+    # because the alternative is a silent retry every six hours for ever.
+    if [[ -n "$now_unlocked" ]] && (( now_unlocked < MIN_VAULTS )); then
+        log "still $now_unlocked of $MIN_VAULTS vaults after a full unlock: an account skipped, or OP_CACHE_WARM_MIN_VAULTS is stale"
+    fi
 else
     code=$?
     log "unlock failed with exit $code"

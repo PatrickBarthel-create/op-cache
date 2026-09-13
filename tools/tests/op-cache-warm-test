@@ -131,6 +131,12 @@ sleep 1
 check "TERM to the script ends the child" $(kill -0 "$holder" 2>/dev/null && print 0 || print 1) "holder=$holder"
 check "lock is gone after TERM" $([[ ! -d "$WORK/tmp/op-cache-warm.lock" ]] && print 1 || print 0)
 
+# 8b. A full unlock that still falls short says so, instead of retrying in silence.
+short=$(stub short 0 'prefetched vaults: 13 unlocked, 0 expired')
+rm -f "$WORK/tmp/op-cache-warm.last-attempt"
+out=$(run "$short" OP_CACHE_WARM_START=0 OP_CACHE_WARM_END=24)
+check "a short result after unlock is logged" $([[ "$out" == *"still 13 of 17 vaults after a full unlock"* ]] && print 1 || print 0) "$out"
+
 # 9. A locked screen skips, whatever the cache says.
 out=$(env OP_CACHE_WARM_SCREEN_LOCKED_CMD=true OP_CACHE_BIN="$cold" TMPDIR="$WORK/tmp" OP_CACHE_WARM_START=0 OP_CACHE_WARM_END=24 "$TOOL" 2>&1)
 check "locked screen skips" $([[ "$out" == *"screen locked"* && "$out" != *"running unlock"* ]] && print 1 || print 0) "$out"
