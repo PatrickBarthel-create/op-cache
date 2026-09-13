@@ -112,8 +112,10 @@ public enum ProxyClassifier {
         if let first = verbs.first, passthroughCommands.contains(first) {
             // Documents are items: `document delete` is a write and is handled
             // below. Everything else under a passthrough command is not.
+            // The verb sits right after `document`; a document merely named
+            // like one (`document get delete`) is an operand.
             let writesADocument = first == "document"
-                && verbs.dropFirst().contains(where: { mutatingVerbs.contains($0) })
+                && verbs.dropFirst().first.map { mutatingVerbs.contains($0) } == true
             if !writesADocument {
                 let named = passthroughWithOperand.contains(subcommand)
                 return ClassifiedCall(
@@ -297,6 +299,11 @@ public enum ProxyClassifier {
         guard operands.count > verbCount else { return nil }
         let operand = operands[verbCount]
         if operand.isEmpty { return nil }
+        // A share link addresses an item too, and carries its access key in
+        // the fragment. The log gets the subcommand, not the link.
+        if operand.lowercased().hasPrefix("http://") || operand.lowercased().hasPrefix("https://") {
+            return nil
+        }
         // A flag value that reached the operands through some parsing gap is
         // still a flag value. `--session TOKEN` must never come out as a subject.
         if flagValues(arguments).contains(operand) { return nil }

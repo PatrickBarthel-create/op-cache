@@ -224,3 +224,9 @@ import Testing
     #expect(ProxyClassifier.classify(["item", "get", "X", "--share-link"]).kind == .passthrough)
     #expect(ProxyClassifier.classify(["document", "get", "--output", "file", "X"]).subject == "X")
 }
+
+@Test func shareLinksAndVerbLikeDocumentsAreHandled() {
+    #expect(ProxyClassifier.classify(["item", "get", "https://share.1password.com/s#TOKENTOKEN"]).subject == "item get")
+    #expect(ProxyClassifier.classify(["document", "get", "delete"]).kind == .passthrough)
+    #expect(ProxyClassifier.classify(["document", "delete", "spec"]).kind == .mutating)
+}

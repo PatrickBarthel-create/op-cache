@@ -189,10 +189,24 @@ public struct ProxyRunner: Sendable {
     /// six-to-eight-digit line, which is what `--fields <otp-field>` returns
     /// and cannot be told apart from a PIN by name alone.
     static func isCacheable(_ value: String) -> Bool {
-        let trimmed = value.trimmingCharacters(in: .newlines)
-        if trimmed.count >= 6, trimmed.count <= 8, trimmed.allSatisfy(\.isNumber) { return false }
-        if trimmed.hasPrefix("{"), let redacted = OTPRedaction.redact(value), redacted != value {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        // A bare code, alone or as one column of a `--fields` CSV line.
+        if trimmed.split(separator: ",").contains(where: { column in
+            column.count >= 6 && column.count <= 8 && column.allSatisfy(\.isNumber)
+        }) { return false }
+        // The seed itself, as `op read op://v/i/<otp field>` returns it: an
+        // otpauth URI or a bare base32 string. A base32-only API key would be
+        // refused too; that costs one approval, never a wrong value.
+        if trimmed.lowercased().hasPrefix("otpauth://") { return false }
+        if trimmed.count >= 16, trimmed.range(of: "^[A-Z2-7]+=*$", options: .regularExpression) != nil {
             return false
+        }
+        // Any JSON shape that carries an OTP field: the full item, a single
+        // field object, or a `--fields` array.
+        if trimmed.hasPrefix("{") || trimmed.hasPrefix("[") {
+            if trimmed.range(of: #""type"\s*:\s*"OTP""#, options: [.regularExpression, .caseInsensitive]) != nil {
+                return false
+            }
         }
         return true
     }

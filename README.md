@@ -139,7 +139,12 @@ Three rules keep it honest, each of them measured against the real `op`:
   The index carries the URLs to see the same ambiguity and forwards the call.
 - **One-time passwords never come from cache.** `--format json` returns both
   the current code and the seed. The seed is stripped before storing, and any
-  path that would return an OTP field is forwarded instead.
+  path that would return an OTP field is forwarded instead. The forwarded
+  result is then not stored either: the digest cache refuses `--otp`,
+  `?attribute=otp` and `--fields type=otp` up front, and inspects everything
+  else it is about to store - an `otpauth://` URI, a bare base32 seed, a JSON
+  field of type OTP in any shape, or a six-to-eight-digit code (alone or as a
+  CSV column) is forwarded but never kept.
 
 Output shapes that cannot be reproduced are forwarded rather than guessed: the
 default human format prints relative timestamps, and `--fields` combined with

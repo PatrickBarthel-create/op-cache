@@ -15,3 +15,18 @@ import Testing
     #expect(ProxyRunner.isCacheable("hunter2-with-letters\n"))
     #expect(ProxyRunner.isCacheable("sbp_0123456789abcdef"))
 }
+
+@Test func digestCacheRefusesSeedsInEveryShape() {
+    // Seventh adversarial round: `op read op://v/i/<otp field>` returns the
+    // seed, `--fields … --format json` returns a field object or array.
+    #expect(!ProxyRunner.isCacheable("otpauth://totp/x?secret=JBSWY3DPEHPK3PXP\n"))
+    #expect(!ProxyRunner.isCacheable("JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP"))
+    #expect(!ProxyRunner.isCacheable(#"{"id":"o","type":"OTP","value":"otpauth://x","totp":"123456"}"#))
+    #expect(!ProxyRunner.isCacheable(#"[{"id":"o","type":"OTP","totp":"123456"},{"id":"u","value":"bob"}]"#))
+    #expect(!ProxyRunner.isCacheable("123456,bob\n"))
+    #expect(!ProxyRunner.isCacheable("123456 \n"))
+    // Ordinary secrets are still cached.
+    #expect(ProxyRunner.isCacheable(#"{"id":"p","type":"CONCEALED","value":"hunter2"}"#))
+    #expect(ProxyRunner.isCacheable("ghp_abcdefghijklmnop0123456789"))
+    #expect(ProxyRunner.isCacheable("bob,hunter2"))
+}
