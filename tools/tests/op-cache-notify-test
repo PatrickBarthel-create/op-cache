@@ -441,6 +441,34 @@ out = subprocess.run([sys.executable, str(TOOL), "--dry-run"], capture_output=Tr
 rare_lines = [l for l in out.splitlines() if l.startswith("RARE")]
 check("a tab in a subject stays inside its field", len(rare_lines) == 1 and rare_lines[0].count("\t") == 2, str(rare_lines))
 
+# ---- Findings of the fifth adversarial round ----
+
+# 30. A rotated log that has already outgrown the old offset is still seen as
+#     new (different file), so nothing written to it is skipped.
+case = Case()
+case.baseline([entry(600, "op://A/routine/c")])
+case.run([entry(600, "op://A/routine/c")])  # offset now covers one line
+rotated = case.directory / "audit-neu.jsonl"
+bigger = [entry(3, f"op://N/verloren-{i}/c") for i in range(4)]
+notifications = case.run(bigger, log=rotated)
+check(
+    "a rotated log larger than the old offset loses nothing",
+    len(notifications) == 1 and "4 seltene" in notifications[0],
+    str(notifications),
+)
+
+# 31. Direction-override characters cannot reshape the banner text.
+case = Case()
+case.baseline([entry(600, "op://A/routine/c")])
+notifications = case.run([entry(600, "op://A/routine/c"), entry(1, "op://X/v‮tide/c")])
+check("a format character is stripped from the banner", len(notifications) == 1 and "‮" not in notifications[0], repr(notifications))
+
+# 32. max_named_subjects below one still names one.
+case = Case({"max_named_subjects": 0})
+case.baseline([entry(600, "op://A/routine/c")])
+notifications = case.run([entry(600, "op://A/routine/c"), entry(1, "op://X/a/c"), entry(1, "op://X/b/c")])
+check("max_named_subjects 0 still names one", len(notifications) == 1 and "op://X/a/c (1.)" in notifications[0] and "und 1 weitere" in notifications[0], str(notifications))
+
 print()
 if failures:
     print(f"{len(failures)} failed: {', '.join(failures)}")

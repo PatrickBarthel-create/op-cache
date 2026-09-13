@@ -195,3 +195,23 @@ import Testing
     #expect(ProxyClassifier.classify(["user", "get", "--me", "geheimwert"]).subject == "user get")
     #expect(ProxyClassifier.classify(["user", "get", "someone@example.com"]).subject == "someone@example.com")
 }
+
+@Test func childCommandsAndCliUpdateAreNotWrites() {
+    // Fifth adversarial round: the words after `op run --` belong to the child,
+    // and `op update` updates the CLI. Neither may wipe the cache.
+    #expect(ProxyClassifier.classify(["run", "--", "update"]).kind == .passthrough)
+    #expect(ProxyClassifier.classify(["run", "--", "update"]).subcommand == "run")
+    #expect(ProxyClassifier.classify(["run", "--env-file=.env", "--", "restore"]).kind == .passthrough)
+    #expect(ProxyClassifier.classify(["run", "--env-file", ".env", "--", "restore"]).kind == .passthrough)
+    #expect(ProxyClassifier.classify(["update"]).kind == .passthrough)
+    // A document is an item: deleting one is still a write.
+    #expect(ProxyClassifier.classify(["document", "delete", "spec"]).kind == .mutating)
+    #expect(ProxyClassifier.classify(["document", "get", "spec"]).kind == .passthrough)
+    #expect(ProxyClassifier.classify(["document", "get", "spec"]).subject == "spec")
+}
+
+@Test func helpAndEmptyOperandsNameNothing() {
+    #expect(ProxyClassifier.classify(["item", "--help"]).subject == nil)
+    #expect(ProxyClassifier.classify(["item", "get", ""]).subject == "item get")
+    #expect(ProxyClassifier.classify(["item", "get", "--vault", "", "GitHub"]).subject == "GitHub")
+}

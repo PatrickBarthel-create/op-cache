@@ -131,6 +131,15 @@ sleep 1
 check "TERM to the script ends the child" $(kill -0 "$holder" 2>/dev/null && print 0 || print 1) "holder=$holder"
 check "lock is gone after TERM" $([[ ! -d "$WORK/tmp/op-cache-warm.lock" ]] && print 1 || print 0)
 
+# 7b. A cold run that ends short is retried on the next tick; only a partial
+#     retry starts the six-hour wait.
+rm -f "$WORK/tmp/op-cache-warm.last-attempt"
+out=$(run "$cold" OP_CACHE_WARM_START=0 OP_CACHE_WARM_END=24)
+out=$(run "$partial" OP_CACHE_WARM_START=0 OP_CACHE_WARM_END=24)
+check "partial after a cold run retries at once" $([[ "$out" == *"running unlock"* ]] && print 1 || print 0) "$out"
+out=$(run "$partial" OP_CACHE_WARM_START=0 OP_CACHE_WARM_END=24)
+check "partial after a partial waits" $([[ "$out" == *"last attempt"* ]] && print 1 || print 0) "$out"
+
 # 8b. A full unlock that still falls short says so, instead of retrying in silence.
 short=$(stub short 0 'prefetched vaults: 13 unlocked, 0 expired')
 rm -f "$WORK/tmp/op-cache-warm.last-attempt"

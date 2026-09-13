@@ -32,6 +32,7 @@ import json
 import os
 import subprocess
 import sys
+import unicodedata
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -161,7 +162,11 @@ def subjects_of(entry: dict) -> list[str]:
 def plain(subject: str) -> str:
     """One line, one field: a subject with a tab or newline in it must not be
     able to forge a second record in the stdout log."""
-    cleaned = "".join(" " if ch in "\t\n\r" or ord(ch) < 32 else ch for ch in subject)
+    cleaned = "".join(
+        " " if ch in "\t\n\r" or ord(ch) < 32 or unicodedata.category(ch) in ("Cf", "Cc")
+        else ch
+        for ch in subject
+    )
     return cleaned if cleaned.strip() else "(leer)"
 
 
@@ -221,6 +226,7 @@ class SingleRun:
             except OSError:
                 age = 0
             if age < 600:
+                warn(f"another run holds the lock ({int(age)}s), skipping")
                 return self
             try:
                 self.path.unlink()
@@ -314,7 +320,14 @@ def main() -> int:
             # let `last_seen` keep the entries it already counted out. Only
             # then: on an intact log the offset alone is exact, and a timestamp
             # filter would drop a late writer whose stamp predates its append.
-            rotated = LOG.stat().st_size < offset
+            # Two signs of a rotation: the file shrank, or it is a different
+            # file (the rotated log is renamed away and a new one created).
+            # Size alone misses a new log that has already outgrown the old
+            # offset by the time the watcher looks again.
+            stat = LOG.stat()
+            rotated = stat.st_size < offset or (
+                isinstance(state.get("inode"), int) and state["inode"] != stat.st_ino
+            )
             if rotated:
                 offset = 0
             entries, size = read_new_entries(
@@ -360,8 +373,8 @@ def main() -> int:
             ordered = sorted(rare.items(), key=lambda item: (item[1], item[0]))
             for subject, before in ordered:
                 print(f"RARE\t{before + 1}\t{plain(subject)}")
-            limit = config["max_named_subjects"]
-            parts = [f"{subject} ({before + 1}.)" for subject, before in ordered[:limit]]
+            limit = max(1, config["max_named_subjects"])
+            parts = [f"{plain(subject)} ({before + 1}.)" for subject, before in ordered[:limit]]
             body = ", ".join(parts)
             if len(ordered) > limit:
                 body += f" und {len(ordered) - limit} weitere"
@@ -393,6 +406,7 @@ def main() -> int:
             state["last_seen"] = stamp(entries[-1][1])
         state["version"] = STATE_VERSION
         state["offset"] = size
+        state["inode"] = stat.st_ino
         state["history"] = history
         state["requests"] = requests
         state["last_run"] = stamp(now)

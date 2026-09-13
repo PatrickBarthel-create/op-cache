@@ -115,10 +115,14 @@ if (( unlocked > 0 )); then
         exit 0
     fi
     log "cache partly warm ($unlocked of $MIN_VAULTS vaults), running unlock --all --ttl $TTL"
+    # Only a retry of a partial warm-up starts the wait. A cold run that ends
+    # short (a write to 1Password wiped the vaults it had already prefetched)
+    # gets one prompt retry on the next tick before the six hours apply.
+    date +%s > "$RETRY_STAMP"
 else
     log "cache cold, running unlock --all --ttl $TTL"
+    rm -f "$RETRY_STAMP"
 fi
-date +%s > "$RETRY_STAMP"
 
 # The unlock runs as a child whose pid is what the lock names: when this
 # script is killed, the lock must still say who is actually holding the

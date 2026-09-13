@@ -98,21 +98,33 @@ public enum ProxyClassifier {
         let verbs = knownVerbCount(leading).map { Array(leading.prefix($0)) } ?? leading
         let subcommand = verbs.joined(separator: " ")
 
-        // Global help/version never reach the network and never prompt.
+        // Global help/version never reach the network and never prompt, and
+        // they name nothing: a help call is not a request for an item.
         if arguments.isEmpty || arguments.contains("--help") || arguments.contains("-h")
             || arguments.contains("--version") {
-            return ClassifiedCall(kind: .passthrough, key: nil, subcommand: subcommand)
+            return ClassifiedCall(kind: .passthrough, key: nil, subcommand: "")
+        }
+
+        // Commands that spawn, stream or update the CLI come first: the words
+        // after `op run --` belong to the child, and `op update` updates op,
+        // not an item. Neither is a write to 1Password.
+        if let first = verbs.first, passthroughCommands.contains(first) {
+            // Documents are items: `document delete` is a write and is handled
+            // below. Everything else under a passthrough command is not.
+            let writesADocument = first == "document"
+                && verbs.dropFirst().contains(where: { mutatingVerbs.contains($0) })
+            if !writesADocument {
+                let named = passthroughWithOperand.contains(subcommand)
+                return ClassifiedCall(
+                    kind: .passthrough, key: nil, subcommand: subcommand,
+                    subject: named ? subject(arguments, verbCount: verbs.count) : reference(arguments)
+                )
+            }
         }
 
         if verbs.contains(where: { mutatingVerbs.contains($0) }) {
             return ClassifiedCall(
                 kind: .mutating, key: nil, subcommand: subcommand, subject: reference(arguments)
-            )
-        }
-
-        if let first = verbs.first, passthroughCommands.contains(first) {
-            return ClassifiedCall(
-                kind: .passthrough, key: nil, subcommand: subcommand, subject: reference(arguments)
             )
         }
 
@@ -157,6 +169,8 @@ public enum ProxyClassifier {
         var index = 0
         while index < arguments.count, verbs.count < 3 {
             let argument = arguments[index]
+            // `--` ends op's own arguments; what follows is a child command.
+            if argument == "--" { break }
             if argument.hasPrefix("-") {
                 // A flag that takes a value swallows the next token, which must
                 // not be mistaken for a subcommand.
@@ -204,6 +218,10 @@ public enum ProxyClassifier {
             "-o", "-i", "-t", "-c",
         ].contains(flag)
     }
+
+    /// Passthrough commands whose operand is worth naming: `document get`
+    /// reads secret material like `item get` does, only it is never cached.
+    private static let passthroughWithOperand: Set<String> = ["document get"]
 
     /// Subcommands that take no operand at all. Whatever follows them is a
     /// mistake, and a mistyped command line is exactly the one that carries
@@ -273,6 +291,7 @@ public enum ProxyClassifier {
 
         guard operands.count > verbCount else { return nil }
         let operand = operands[verbCount]
+        if operand.isEmpty { return nil }
         // A flag value that reached the operands through some parsing gap is
         // still a flag value. `--session TOKEN` must never come out as a subject.
         if flagValues(arguments).contains(operand) { return nil }
@@ -291,7 +310,7 @@ public enum ProxyClassifier {
         // including as the value of `--vault`, where op would reject it but
         // the log would not.
         if operand.contains("=") { return nil }
-        guard let vault else { return operand }
+        guard let vault, !vault.isEmpty else { return operand }
         if vault.contains("=") { return nil }
         return "\(vault)/\(operand)"
     }
