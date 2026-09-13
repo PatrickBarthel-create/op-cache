@@ -220,11 +220,14 @@ public struct ProxyRunner: Sendable {
             for candidate in [piece.replacingOccurrences(of: " ", with: "")] + words
             where candidate.count >= 16 {
                 if candidate.range(of: "^[A-Z2-7]+=*$", options: .regularExpression) != nil { return false }
-                // Lower-case base32 collides with an all-letter passphrase,
-                // which is common and must stay cacheable; a seed almost
-                // always carries digits, so lower case is refused only with
-                // at least two of them.
+                // Lower-case base32 collides with two things that must stay
+                // cacheable: an all-letter passphrase, and op's own item IDs -
+                // 26 lower-case base32 characters, on the `ID:` line of every
+                // table-format `item get`, which is half of all calls here.
+                // Lower case is therefore refused only at the lengths a seed
+                // comes in (16, 32, 52, 64 - never 26) and with digits in it.
                 if candidate.range(of: "^[a-z2-7]+=*$", options: .regularExpression) != nil,
+                   [16, 32, 52, 64].contains(candidate.filter { $0 != "=" }.count),
                    candidate.filter(\.isNumber).count >= 2 {
                     return false
                 }

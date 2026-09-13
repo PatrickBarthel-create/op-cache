@@ -142,10 +142,17 @@ if wait "$child"; then
     # The unlock names every account it skipped. Keep that as the marker for
     # the next tick; without it a skipped account would never be retried, and
     # with a silent retry nobody would learn that it keeps being skipped.
-    skipped=$(grep -o 'skipped [^:]*' "$UNLOCK_OUT" | sort -u | tr '\n' ' ')
+    # Two ways an account drops out: its approval timed out ("skipped
+    # <account>: …"), or it authenticated and then listed no vaults
+    # ("<account>: no vaults visible, skipping"). Both leave the marker.
+    skipped=$(grep -oE 'skipped [^:]+|[^ ]+: no vaults visible' "$UNLOCK_OUT" | sort -u | tr '\n' ';' | sed 's/;$//')
     if [[ -n "$skipped" ]]; then
         print -r -- "$skipped" > "$PARTIAL_MARK"
-        log "partial: $skipped- will retry in $((PARTIAL_RETRY_SECONDS / 3600))h"
+        if [[ -f "$RETRY_STAMP" ]]; then
+            log "partial: $skipped - next retry in $((PARTIAL_RETRY_SECONDS / 3600))h"
+        else
+            log "partial: $skipped - one more try on the next tick, then every $((PARTIAL_RETRY_SECONDS / 3600))h"
+        fi
     else
         rm -f "$PARTIAL_MARK" "$RETRY_STAMP"
     fi

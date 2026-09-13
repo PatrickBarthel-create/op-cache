@@ -267,8 +267,15 @@ create`, …): a write drops the prefetch, because a renamed or rotated item
 must not be answered from a stale copy (the digest cache goes with it), and
 the proxy then kicks the agent so the rebuild happens while you are still at
 the keyboard - subject to the same screen-lock and working-hours rules as any
-run. A partial warm-up (one account did not approve) is retried at most every
-six hours.
+run. A partial warm-up (an account did not approve, or listed no vaults) is
+retried once on the next tick and after that at most every six hours. An
+approval dialog left unanswered runs into op's own timeout; measured on the
+first evening, one stood open for 70 minutes before that.
+
+Accounts on this machine, as the first live run listed them:
+`everlastconsultinggmbh.1password.eu`, `strategie-fm.1password.eu` and
+`momento-kuechen.1password.com` (11 items) - the third is not in the
+workspace's notes on 1Password accounts and prompts on its own.
 
 `op-cache-notify` runs every minute and raises a macOS notification for:
 

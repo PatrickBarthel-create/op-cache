@@ -45,3 +45,26 @@ import Testing
     #expect(ProxyRunner.isCacheable("sk_live_0a1b8c9d0a1b8c9d0a1b"))
     #expect(ProxyRunner.isCacheable("label     value\npassword  hunter2\nusername  bob\n"))
 }
+
+@Test func tableFormatOfItemGetStaysCacheable() {
+    // Ninth adversarial round: the ID line of every table-format `item get`
+    // is 26 lower-case base32 characters with digits, and the lower-case rule
+    // refused all of them - half of the calls on this machine.
+    let table = """
+    ID:          26ykszxp7l7b4fov5lcvoiiflm
+    Title:       GitHub
+    Vault:       Employee (5hwfmet3vgvj7khe43qiuokfu4)
+    Edited:      3 weeks ago
+    Version:     4
+    Category:    LOGIN
+    Fields:
+      username:    bob
+      password:    hunter2
+    """
+    #expect(ProxyRunner.isCacheable(table))
+    // A lower-case seed at a seed length is still refused.
+    #expect(!ProxyRunner.isCacheable("jbswy3dpehpk3pxpjbswy3dpehpk3pxp"))
+    #expect(!ProxyRunner.isCacheable("jbswy3dpehpk3pxp"))
+    // 26 characters with digits: an ID, not a seed.
+    #expect(ProxyRunner.isCacheable("26ykszxp7l7b4fov5lcvoiiflm"))
+}

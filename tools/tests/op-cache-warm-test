@@ -73,6 +73,18 @@ check "a skipped account is logged and marked" $([[ "$out" == *"partial: skipped
 out=$(run "$partial" OP_CACHE_WARM_START=0 OP_CACHE_WARM_END=24)
 check "a marked warm cache is redone" $([[ "$out" == *"partly warm (8 vaults; skipped strategie-fm"* && "$out" == *"running unlock"* ]] && print 1 || print 0) "$out"
 
+# 2c. An account that authenticated but listed no vaults is marked too, and
+#     two dropped accounts both appear in the marker.
+rm -f "$WORK/tmp/op-cache-warm.partial" "$WORK/tmp/op-cache-warm.last-attempt"
+novaults=$(stub novaults 0 'prefetched vaults: 0 unlocked, 0 expired
+  momento-kuechen.1password.com: no vaults visible, skipping
+  skipped strategie-fm.1password.eu: [ERROR] authorization timeout')
+out=$(run "$novaults" OP_CACHE_WARM_START=0 OP_CACHE_WARM_END=24)
+mark=$(cat "$WORK/tmp/op-cache-warm.partial" 2>/dev/null)
+check "no-vaults account is marked" $([[ "$mark" == *"momento-kuechen.1password.com: no vaults visible"* ]] && print 1 || print 0) "$mark"
+check "both dropped accounts are in the marker" $([[ "$mark" == *"skipped strategie-fm.1password.eu"* ]] && print 1 || print 0) "$mark"
+check "a cold partial says the next tick retries" $([[ "$out" == *"one more try on the next tick"* ]] && print 1 || print 0) "$out"
+
 # 3. An unreadable status must NOT be read as cold: that would prompt.
 broken=$(stub broken 1 'irgendein Fehler')
 out=$(run "$broken" OP_CACHE_WARM_START=0 OP_CACHE_WARM_END=24)
