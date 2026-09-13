@@ -100,6 +100,7 @@ rm -f "$argsfile" "$WORK/tmp/op-cache-warm.last-attempt"
 print -r -- "skipped strategie-fm.1password.eu;momento-kuechen.1password.com: no vaults visible" > "$WORK/tmp/op-cache-warm.partial"
 out=$(run "$recorder" OP_CACHE_WARM_START=0 OP_CACHE_WARM_END=24)
 check "retry passes only the dropped accounts" $(grep -q -- '^unlock --all --account strategie-fm.1password.eu,momento-kuechen.1password.com --ttl' "$argsfile" && print 1 || print 0) "$(cat "$argsfile")"
+check "every run sweeps expired bundles first" $(head -1 "$argsfile" | grep -q '^sweep$' && print 1 || print 0) "$(cat "$argsfile")"
 check "a complete retry clears the marker" $([[ ! -f "$WORK/tmp/op-cache-warm.partial" ]] && print 1 || print 0)
 rm -f "$argsfile"
 out=$(run "$recorder" OP_CACHE_WARM_START=0 OP_CACHE_WARM_END=24)
@@ -166,6 +167,7 @@ slow=$(stub slow 0 'prefetched vaults: 0 unlocked, 0 expired')
 {
     print '#!/bin/sh'
     print 'if [ "$1" = "status" ]; then echo "prefetched vaults: 0 unlocked, 0 expired"; exit 0; fi'
+    print 'if [ "$1" = "sweep" ]; then exit 0; fi'
     print 'sleep 60'
 } > "$slow"
 env OP_CACHE_WARM_SCREEN_LOCKED_CMD=false OP_CACHE_BIN="$slow" OP_CACHE_WARM_STATE_DIR="$WORK/tmp" OP_CACHE_WARM_START=0 OP_CACHE_WARM_END=24 OP_CACHE_WARM_PARTIAL_RETRY=0 "$TOOL" >/dev/null 2>&1 &

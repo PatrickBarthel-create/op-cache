@@ -34,3 +34,15 @@ import Testing
         try store.put(huge, account: "test.invalid", vaultID: "v", expiresAt: Date())
     }
 }
+
+@Test func aClearLeavesAMarkAPrefetchCanSee() {
+    // Twelfth adversarial round: a prefetch that started before a write must
+    // not write pre-write documents back after the clear.
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let before = Date().addingTimeInterval(-1)
+    #expect(!ItemStore.invalidated(since: before, in: directory))
+    ItemStore.markInvalidated(in: directory)
+    #expect(ItemStore.invalidated(since: before, in: directory))
+    #expect(!ItemStore.invalidated(since: Date().addingTimeInterval(60), in: directory))
+}

@@ -44,7 +44,8 @@ public struct PrefetchRunner: Sendable {
         log: @escaping @Sendable (String) -> Void
     ) throws -> PrefetchSummary {
         var summary = PrefetchSummary()
-        let expiresAt = Date().addingTimeInterval(ttl)
+        let startedAt = Date()
+        let expiresAt = startedAt.addingTimeInterval(ttl)
         summary.expiresAt = expiresAt
 
         let accounts = try listAccounts().filter { account in
@@ -97,6 +98,15 @@ public struct PrefetchRunner: Sendable {
                 // One Keychain entry per vault, written once the whole vault
                 // is in hand: see VaultBundle for why the granularity matters.
                 if !result.bundle.items.isEmpty {
+                    // A write to 1Password during this run cleared the store;
+                    // what is in hand was read before the write and must not
+                    // be put back as if it were current.
+                    if ItemStore.invalidated(since: startedAt) {
+                        throw OpCacheError.message(
+                            "A write to 1Password cleared the cache while this prefetch was running; "
+                            + "nothing from this run is stored. Run unlock --all again."
+                        )
+                    }
                     do {
                         try store.put(
                             result.bundle,
@@ -131,6 +141,14 @@ public struct PrefetchRunner: Sendable {
         // unreachable by reference while still sitting in the Keychain -
         // measured on 13.09.2026: after a one-account retry the index listed
         // "1 account(s)" and the other 982 items missed the cache.
+        if ItemStore.invalidated(since: startedAt) {
+            // Bundles written before the clear are gone; an index naming them
+            // would send calls to the Keychain for nothing.
+            throw OpCacheError.message(
+                "A write to 1Password cleared the cache while this prefetch was running; "
+                + "the index is not written. Run unlock --all again."
+            )
+        }
         try ItemIndex.merging(existing: ItemIndex.load(), fresh: indexed).save()
 
         audit.record(

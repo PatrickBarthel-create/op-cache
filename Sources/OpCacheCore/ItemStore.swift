@@ -105,7 +105,31 @@ public struct ItemStore: Sendable {
             try? keychain.delete(name: name, profile: Self.profileName)
         }
         ItemIndex.remove()
+        Self.markInvalidated()
         return names.count
+    }
+
+    /// Where a clear leaves its timestamp. A prefetch that started before it
+    /// holds pre-clear documents in memory and must not write them back.
+    public static func invalidationMarkURL(in directory: URL? = nil) -> URL {
+        (directory ?? MetaCache.defaultDirectory().deletingLastPathComponent())
+            .appendingPathComponent("invalidated")
+    }
+
+    public static func markInvalidated(in directory: URL? = nil) {
+        let url = invalidationMarkURL(in: directory)
+        try? FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(), withIntermediateDirectories: true
+        )
+        try? Data().write(to: url)
+        try? FileManager.default.setAttributes([.modificationDate: Date()], ofItemAtPath: url.path)
+    }
+
+    /// Whether a clear happened after `moment`.
+    public static func invalidated(since moment: Date, in directory: URL? = nil) -> Bool {
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: invalidationMarkURL(in: directory).path),
+              let modified = attributes[.modificationDate] as? Date else { return false }
+        return modified > moment
     }
 
     /// Live and expired bundle counts, for `op-cache status`.
