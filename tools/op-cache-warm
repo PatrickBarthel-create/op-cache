@@ -84,12 +84,6 @@ fi
 print -r -- $$ > "$LOCK/pid"
 trap 'rm -f "$LOCK/pid"; rmdir "$LOCK" 2>/dev/null' EXIT INT TERM
 
-# A prefetch never deletes a bundle it no longer sees, so a vault that went
-# away, emptied, or belonged to an account that skipped leaves its old bundle
-# behind. Once that bundle expires it would count as "expired" for ever and
-# read as a cold cache every hour. The sweep removes it; nothing else does.
-sweep_out=$("$OP_CACHE" sweep 2>&1) || log "sweep failed: ${sweep_out:0:200}"
-
 # Not named `status`: zsh reserves it as a read-only alias for `$?`, and the
 # assignment fails at run time rather than at parse time.
 items_status=$("$OP_CACHE" status _items 2>&1)
@@ -161,6 +155,14 @@ trap 'kill -TERM "$child" 2>/dev/null; rm -f "$LOCK/pid"; rmdir "$LOCK" 2>/dev/n
 if wait "$child"; then
     cat "$UNLOCK_OUT"
     log "warm: $("$OP_CACHE" status _items | head -1)"
+    # A prefetch never deletes a bundle it no longer sees, so a vault that
+    # went away, emptied, or belonged to an account that skipped leaves its
+    # old bundle behind. Expired, it would read as a cold cache every hour.
+    # Swept only now, after the status decided: swept before it, an expired
+    # main account would vanish from the count and never be rewarmed. Only
+    # `_items` is swept - an entry another build wrote raises a dialog when
+    # read, and the config profiles hold such entries.
+    sweep_out=$("$OP_CACHE" sweep _items 2>&1) || log "sweep failed: ${sweep_out:0:200}"
     # The unlock names every account it skipped. Keep that as the marker for
     # the next tick; without it a skipped account would never be retried, and
     # with a silent retry nobody would learn that it keeps being skipped.

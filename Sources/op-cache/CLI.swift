@@ -11,7 +11,7 @@ Usage:
   op-cache run <profile> [--only NAME,NAME] -- <command> [args...]
   op-cache status <profile>
   op-cache clear <profile>
-  op-cache sweep
+  op-cache sweep [<profile>]
   op-cache watch [--lock]
   op-cache proxy -- op <args...>
   op-cache refresh
@@ -65,7 +65,7 @@ enum CLI {
         case "clear":
             try clear(Array(arguments.dropFirst()))
         case "sweep":
-            try sweep()
+            try sweep(only: arguments.dropFirst().first)
         case "watch":
             try watch(Array(arguments.dropFirst()))
         case "proxy":
@@ -333,12 +333,16 @@ enum CLI {
         print("Cleared profile '\(profileName)'.")
     }
 
-    private static func sweep() throws {
+    /// Everlast fork: `only` narrows the sweep to one profile. The warm-up
+    /// agent sweeps `_items` alone - reading an entry another build wrote
+    /// raises a Keychain dialog, and the config profiles here still hold
+    /// entries from builds of August.
+    private static func sweep(only: String? = nil) throws {
         let config = try loadConfig()
         let keychain = KeychainStore()
         var removed = 0
 
-        for profileName in try keychain.allProfiles() {
+        for profileName in try keychain.allProfiles() where only == nil || profileName == only {
             // The proxy and item-store profiles are populated at call and
             // prefetch time and never appear in the config, so the "not in
             // config" rule would wipe them wholesale. Their entries still age
