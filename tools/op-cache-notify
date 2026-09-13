@@ -7,11 +7,16 @@ served without any approval prompt, so the prompt no longer works as a signal
 that something read a credential. This restores a signal without restoring the
 friction:
 
-  * an `op://` reference fetched fewer than `rare_threshold` times in the
-    trailing week - the class a foreign process would fall into, since the
-    routine working set is small and repetitive.
+  * an `op://` reference or item name asked for fewer than `rare_threshold`
+    times in the trailing week - the class a foreign process falls into, since
+    the routine working set is small and repetitive.
   * more than `rate_threshold` requests within the trailing hour - a burst,
     whatever asked for it.
+
+The counts live in the state file, not in the log. The log rotates at 5 MB and
+can be truncated or deleted; a history that is rebuilt from it would then read
+every routine reference as first-time and say so, loudly, exactly when it is
+least useful.
 
 It reads only the audit log, never the Keychain, and the log holds references
 and item names, never field values.
@@ -22,12 +27,14 @@ Runs from a LaunchAgent every minute; state lives in
 
 from __future__ import annotations
 
+import errno
 import json
 import os
 import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
 
 def path_from(variable: str, default: str) -> Path:
     return Path(os.path.expanduser(os.environ.get(variable, default)))
@@ -41,26 +48,25 @@ CONFIG = path_from("OP_CACHE_NOTIFY_CONFIG", "~/.config/op-cache/notify.json")
 DRY_RUN = "--dry-run" in sys.argv
 
 DEFAULTS = {
-    # Fewer than this many fetches of the same reference in the trailing week
-    # makes the fetch worth showing.
+    # Fewer than this many requests for the same subject in the trailing week
+    # makes the request worth showing.
     "rare_threshold": 3,
     "rare_window_days": 7,
-    # How far back a run will report. Bounds the catch-up after downtime and,
-    # on a first run with no state, stops a week of routine fetches arriving as
-    # notifications at once.
-    "catchup_minutes": 60,
     # Requests in the trailing hour above this raise a burst warning.
     "rate_threshold": 50,
     # Never repeat the burst warning more often than this.
     "rate_cooldown_minutes": 60,
+    # How far back a run will report. Bounds the catch-up after downtime.
+    "catchup_minutes": 60,
     # One notification per run at most; more subjects than this are summarised.
     "max_named_subjects": 4,
     "enabled": True,
 }
 
-# Call kinds that return secret material. Metadata listings are counted for the
-# burst check but never named: they carry no credential.
-SECRET_KINDS = {"secret", "item-store"}
+# Call kinds that reach a credential, cached or not. `metadata` is a listing:
+# it carries no field value, but naming the vault someone enumerated is the
+# whole point of this watcher, so it counts too.
+NAMED_KINDS = {"secret", "item-store", "metadata", "passthrough", "mutating"}
 
 
 def load_config() -> dict:
@@ -76,9 +82,10 @@ def load_config() -> dict:
 
 def load_state() -> dict:
     try:
-        return json.loads(STATE.read_text())
+        state = json.loads(STATE.read_text())
     except (OSError, ValueError):
         return {}
+    return state if isinstance(state, dict) else {}
 
 
 def save_state(state: dict) -> None:
@@ -95,35 +102,22 @@ def warn(message: str) -> None:
 def parse_time(value: str) -> datetime | None:
     try:
         return datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except (AttributeError, ValueError):
+    except (AttributeError, TypeError, ValueError):
         return None
 
 
-def read_entries(cut: datetime) -> tuple[list[tuple[int, dict, datetime]], int]:
-    """Every entry at or after `cut`, each with the byte offset it ended at,
-    plus the size of the log. Offsets are what tells a new entry from one this
-    run has already seen."""
-    entries: list[tuple[int, dict, datetime]] = []
-    size = 0
-    with LOG.open("rb") as handle:
-        for raw in handle:
-            size += len(raw)
-            try:
-                entry = json.loads(raw)
-            except ValueError:
-                continue
-            stamp = parse_time(entry.get("timestamp", ""))
-            if stamp is None or stamp < cut:
-                continue
-            entries.append((size, entry, stamp))
-    return entries, size
+def stamp(moment: datetime) -> str:
+    return moment.isoformat().replace("+00:00", "Z")
 
 
 def subjects_of(entry: dict) -> list[str]:
+    secrets = entry.get("secrets")
+    if not isinstance(secrets, list):
+        return []
     return [
         secret["reference"]
-        for secret in entry.get("secrets") or []
-        if isinstance(secret, dict) and secret.get("reference")
+        for secret in secrets
+        if isinstance(secret, dict) and isinstance(secret.get("reference"), str)
     ]
 
 
@@ -132,19 +126,87 @@ def notify(title: str, message: str) -> None:
         print(f"NOTIFY\t{title}\t{message}")
         return
 
-    # osascript keeps this dependency-free. Quotes are the only metacharacter
-    # that matters inside an AppleScript string literal.
+    # osascript keeps this dependency-free. Quotes and backslashes are the only
+    # metacharacters inside an AppleScript string literal, and a subject comes
+    # from a command line someone else wrote, so both are escaped.
     def quote(text: str) -> str:
         return text.replace("\\", "\\\\").replace('"', '\\"')
 
-    script = (
-        f'display notification "{quote(message)}" '
-        f'with title "{quote(title)}"'
-    )
+    script = f'display notification "{quote(message)}" with title "{quote(title)}"'
     try:
         subprocess.run(["osascript", "-e", script], check=True, capture_output=True)
     except (OSError, subprocess.CalledProcessError) as error:
         warn(f"notification failed: {error}")
+
+
+class SingleRun:
+    """One run at a time. Two runs sharing a state file would each count the
+    same entries and could name the same subject twice."""
+
+    def __init__(self, path: Path) -> None:
+        self.path = path.with_suffix(".lock")
+        self.held = False
+
+    def __enter__(self) -> "SingleRun":
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            handle = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except OSError as error:
+            if error.errno != errno.EEXIST:
+                raise
+            # A run that died leaves its lock behind; ten minutes is far longer
+            # than a run needs (measured: 0.04s) and short enough to recover on
+            # the next tick.
+            try:
+                age = datetime.now().timestamp() - self.path.stat().st_mtime
+            except OSError:
+                age = 0
+            if age < 600:
+                return self
+            try:
+                self.path.unlink()
+                handle = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            except OSError:
+                return self
+        os.write(handle, str(os.getpid()).encode())
+        os.close(handle)
+        self.held = True
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        if self.held:
+            try:
+                self.path.unlink()
+            except OSError:
+                pass
+
+
+def read_new_entries(offset: int, after: datetime | None) -> tuple[list[tuple[dict, datetime]], int]:
+    """Entries written since the last run, with the log's size. Two guards,
+    because either can be wrong on its own: the byte offset misses nothing but
+    resets to zero when the log rotates, and the timestamp survives rotation
+    but has one-second resolution."""
+    entries: list[tuple[dict, datetime]] = []
+    size = 0
+    with LOG.open("rb") as handle:
+        for raw in handle:
+            start = size
+            size += len(raw)
+            if start < offset:
+                continue
+            try:
+                entry = json.loads(raw)
+            except ValueError:
+                continue
+            if not isinstance(entry, dict):
+                continue
+            moment = parse_time(entry.get("timestamp", ""))
+            if moment is None:
+                continue
+            if after is not None and moment < after:
+                continue
+            entries.append((entry, moment))
+    return entries, size
 
 
 def main() -> int:
@@ -156,68 +218,101 @@ def main() -> int:
 
     now = datetime.now(timezone.utc)
     window = timedelta(days=int(config["rare_window_days"]))
-    entries, size = read_entries(now - window)
-
-    state = load_state()
-    # A shrunken log means it was rotated or truncated; start from its front
-    # rather than skipping everything written since.
-    offset = state.get("offset", 0)
-    if offset > size:
-        offset = 0
-
-    # "Fewer than N times this week" is counted over the whole window, not just
-    # over what this run happens to see as new. The offset decides what gets
-    # reported; it must not decide what counts as routine, or the first run
-    # after an install would name a week's worth of routine fetches.
-    rare_threshold = int(config["rare_threshold"])
     catchup = now - timedelta(minutes=int(config["catchup_minutes"]))
-    seen: dict[str, int] = {}
-    rare: dict[str, int] = {}
-    for end, entry, stamp in entries:
-        for subject in subjects_of(entry):
-            before = seen.get(subject, 0)
-            seen[subject] = before + 1
-            if (
-                end > offset
-                and stamp >= catchup
-                and entry.get("cacheKind") in SECRET_KINDS
-                and before < rare_threshold
-                and subject not in rare
-            ):
-                rare[subject] = before
+    rare_threshold = int(config["rare_threshold"])
 
-    if rare:
-        limit = int(config["max_named_subjects"])
-        names = sorted(rare)
-        if len(names) <= limit:
-            body = ", ".join(names)
-        else:
-            body = ", ".join(names[:limit]) + f" und {len(names) - limit} weitere"
-        days = int(config["rare_window_days"])
-        notify(
-            f"op-cache: {len(names)} seltene Abfrage" + ("n" if len(names) > 1 else ""),
-            f"{body} — unter {rare_threshold}x in {days} Tagen geholt",
+    with SingleRun(STATE) as lock:
+        if not lock.held:
+            return 0
+
+        state = load_state()
+        first_run = "offset" not in state
+        offset = state.get("offset", 0)
+        if not isinstance(offset, int) or offset < 0:
+            offset = 0
+        last_seen = parse_time(state.get("last_seen", ""))
+
+        history = state.get("history")
+        if not isinstance(history, dict):
+            history = {}
+        requests = state.get("requests")
+        if not isinstance(requests, list):
+            requests = []
+
+        try:
+            # A log that shrank was rotated or truncated, and the byte offset
+            # then points past its end: everything would be skipped and the
+            # watcher would go quiet for good. Start from the front instead and
+            # let `last_seen` keep the entries it already counted out.
+            if LOG.stat().st_size < offset:
+                offset = 0
+            entries, size = read_new_entries(0 if first_run else offset, last_seen)
+        except OSError as error:
+            warn(f"log unreadable: {error}")
+            return 0
+
+        rare: dict[str, int] = {}
+        for entry, moment in entries:
+            requests.append(stamp(moment))
+            for subject in subjects_of(entry):
+                seen = history.get(subject)
+                seen = seen if isinstance(seen, list) else []
+                before = len(seen)
+                seen.append(stamp(moment))
+                history[subject] = seen
+                # The first run only builds the baseline. Without that, an
+                # install or a lost state file would announce a week of routine
+                # traffic as if every reference were new.
+                if (
+                    not first_run
+                    and moment >= catchup
+                    and entry.get("cacheKind") in NAMED_KINDS
+                    and before < rare_threshold
+                    and subject not in rare
+                ):
+                    rare[subject] = before
+
+        # Trim both histories to the window they are counted over.
+        cut = stamp(now - window)
+        history = {
+            subject: [seen for seen in stamps if seen >= cut]
+            for subject, stamps in history.items()
+        }
+        history = {subject: stamps for subject, stamps in history.items() if stamps}
+        hour_cut = stamp(now - timedelta(hours=1))
+        requests = [seen for seen in requests if seen >= hour_cut]
+
+        if rare:
+            limit = int(config["max_named_subjects"])
+            names = sorted(rare)
+            body = ", ".join(names[:limit])
+            if len(names) > limit:
+                body += f" und {len(names) - limit} weitere"
+            days = int(config["rare_window_days"])
+            notify(
+                f"op-cache: {len(names)} seltene Abfrage" + ("n" if len(names) > 1 else ""),
+                f"{body} — unter {rare_threshold}x in {days} Tagen geholt",
+            )
+
+        rate_threshold = int(config["rate_threshold"])
+        last_alert = parse_time(state.get("last_rate_alert", "")) or datetime.min.replace(
+            tzinfo=timezone.utc
         )
+        cooldown = timedelta(minutes=int(config["rate_cooldown_minutes"]))
+        if len(requests) > rate_threshold and now - last_alert >= cooldown:
+            notify(
+                "op-cache: ungewöhnlich viele Abfragen",
+                f"{len(requests)} Anfragen in der letzten Stunde (Schwelle {rate_threshold})",
+            )
+            state["last_rate_alert"] = stamp(now)
 
-    # Burst check over everything, cached or not: the question is how much was
-    # asked for, not how much reached 1Password.
-    hour_ago = now - timedelta(hours=1)
-    in_hour = sum(1 for _, _, stamp in entries if stamp >= hour_ago)
-    rate_threshold = int(config["rate_threshold"])
-    last_alert = parse_time(state.get("last_rate_alert", "")) or datetime.min.replace(
-        tzinfo=timezone.utc
-    )
-    cooldown = timedelta(minutes=int(config["rate_cooldown_minutes"]))
-    if in_hour > rate_threshold and now - last_alert >= cooldown:
-        notify(
-            "op-cache: ungewöhnlich viele Abfragen",
-            f"{in_hour} Anfragen in der letzten Stunde (Schwelle {rate_threshold})",
-        )
-        state["last_rate_alert"] = now.isoformat().replace("+00:00", "Z")
-
-    state["offset"] = size
-    state["last_run"] = now.isoformat().replace("+00:00", "Z")
-    save_state(state)
+        if entries:
+            state["last_seen"] = entries[-1][1].isoformat().replace("+00:00", "Z")
+        state["offset"] = size
+        state["history"] = history
+        state["requests"] = requests
+        state["last_run"] = stamp(now)
+        save_state(state)
     return 0
 
 

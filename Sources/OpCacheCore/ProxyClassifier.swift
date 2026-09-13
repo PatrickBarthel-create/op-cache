@@ -95,15 +95,23 @@ public enum ProxyClassifier {
         }
 
         if verbs.contains(where: { mutatingVerbs.contains($0) }) {
-            return ClassifiedCall(kind: .mutating, key: nil, subcommand: subcommand)
+            return ClassifiedCall(
+                kind: .mutating, key: nil, subcommand: subcommand, subject: reference(arguments)
+            )
         }
 
         if let first = verbs.first, passthroughCommands.contains(first) {
-            return ClassifiedCall(kind: .passthrough, key: nil, subcommand: subcommand)
+            return ClassifiedCall(
+                kind: .passthrough, key: nil, subcommand: subcommand, subject: reference(arguments)
+            )
         }
 
         if arguments.contains(where: { neverCacheFlags.contains($0) }) {
-            return ClassifiedCall(kind: .passthrough, key: nil, subcommand: subcommand)
+            return ClassifiedCall(
+                kind: .passthrough, key: nil, subcommand: subcommand,
+                subject: knownVerbCount(verbs).map { subject(arguments, verbCount: $0) }
+                    ?? reference(arguments)
+            )
         }
 
         // Longest match first so "item template list" wins over "item".
@@ -158,6 +166,24 @@ public enum ProxyClassifier {
         ].contains(flag)
     }
 
+    /// How many leading operands are a known subcommand path, or nil when the
+    /// call matches none - then only an `op://` reference is safe to name,
+    /// because the operand after an unknown verb may be a `field=value` pair.
+    static func knownVerbCount(_ verbs: [String]) -> Int? {
+        for candidate in prefixes(of: verbs)
+        where secretCommands.contains(candidate) || metadataCommands.contains(candidate) {
+            return candidate.split(separator: " ").count
+        }
+        return nil
+    }
+
+    /// The first `op://` reference on the command line. Used where the
+    /// subcommand path is unknown or the call is never cached: a reference is
+    /// always safe to record, an arbitrary operand is not.
+    static func reference(_ arguments: [String]) -> String? {
+        arguments.first { $0.hasPrefix("op://") }
+    }
+
     /// The operand the call names, after dropping its subcommand verbs: the
     /// `op://` reference for `read`, the item name or ID for `item get`.
     /// A `--vault` is folded in so two items of the same name stay apart.
@@ -187,6 +213,9 @@ public enum ProxyClassifier {
         guard operands.count > verbCount else { return nil }
         let operand = operands[verbCount]
         if operand.hasPrefix("op://") { return operand }
+        // `field=value` is an assignment, and its right-hand side is a secret
+        // being written. Never recorded, whatever position it appears in.
+        if operand.contains("=") { return nil }
         guard let vault else { return operand }
         return "\(vault)/\(operand)"
     }

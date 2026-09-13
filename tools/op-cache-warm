@@ -19,6 +19,9 @@ LOCK="${TMPDIR:-/tmp}/op-cache-warm.lock"
 TTL="${OP_CACHE_WARM_TTL:-3d}"
 START_HOUR="${OP_CACHE_WARM_START:-7}"
 END_HOUR="${OP_CACHE_WARM_END:-23}"
+# Longer than a full prefetch takes (measured: about two and a half minutes for
+# 1,100 items), short enough that an hourly timer recovers by itself.
+STALE_LOCK_SECONDS="${OP_CACHE_WARM_STALE_LOCK:-1800}"
 
 log() { print -r -- "$(date '+%Y-%m-%d %H:%M:%S') $*"; }
 
@@ -37,17 +40,37 @@ fi
 
 # One warm-up at a time: the unlock takes minutes and the timer fires hourly.
 if ! mkdir "$LOCK" 2>/dev/null; then
-    log "another warm-up holds the lock, skipping"
-    exit 0
+    # A run killed mid-unlock leaves its lock behind. Without this the cache
+    # would never be warmed again, and nothing would say so.
+    age=$(( $(date +%s) - $(stat -f %m "$LOCK" 2>/dev/null || date +%s) ))
+    if (( age < STALE_LOCK_SECONDS )); then
+        log "another warm-up holds the lock (${age}s), skipping"
+        exit 0
+    fi
+    log "breaking a stale lock (${age}s old)"
+    rmdir "$LOCK" 2>/dev/null
+    if ! mkdir "$LOCK" 2>/dev/null; then
+        log "lock still held after breaking it, skipping"
+        exit 0
+    fi
 fi
 trap 'rmdir "$LOCK" 2>/dev/null' EXIT INT TERM
 
 # Not named `status`: zsh reserves it as a read-only alias for `$?`, and the
 # assignment fails at run time rather than at parse time.
 items_status=$("$OP_CACHE" status _items 2>&1)
+rc=$?
 unlocked=$(print -r -- "$items_status" | sed -n 's/^prefetched vaults: \([0-9][0-9]*\) unlocked.*/\1/p')
 
-if [[ -n "$unlocked" && "$unlocked" != "0" ]]; then
+# An unreadable status is not a cold cache. Warming on it would answer a
+# crashed or reworded status command with a biometric prompt, which is the one
+# thing this script exists to avoid.
+if (( rc != 0 )) || [[ -z "$unlocked" ]]; then
+    log "status unreadable (exit $rc): ${items_status:0:200}"
+    exit 1
+fi
+
+if [[ "$unlocked" != "0" ]]; then
     log "cache warm ($unlocked vaults), nothing to do"
     exit 0
 fi

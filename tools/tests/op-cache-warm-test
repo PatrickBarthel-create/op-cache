@@ -1,0 +1,92 @@
+#!/bin/zsh
+# Tests for op-cache-warm. Every branch is exercised against a stub op-cache,
+# so no test ever reaches 1Password or asks for an approval.
+#
+# The stub is the point: the branch that matters is the one that decides to
+# prompt, and it must never fire on a status it could not read.
+
+set -u
+
+TOOL="${0:A:h:h}/op-cache-warm"
+WORK=$(mktemp -d)
+trap 'rm -rf "$WORK"' EXIT
+
+typeset -i failures=0
+
+check() {
+    local name=$1 condition=$2 detail=${3:-}
+    if [[ "$condition" == "1" ]]; then
+        print "ok   $name"
+    else
+        print "FAIL $name $detail"
+        (( failures++ ))
+    fi
+}
+
+stub() {  # stub <name> <exit> <output...>
+    local path="$WORK/$1"
+    {
+        print '#!/bin/sh'
+        print "cat <<'OUT'"
+        print -r -- "$3"
+        print 'OUT'
+        print "exit $2"
+    } > "$path"
+    /bin/chmod +x "$path"
+    print -r -- "$path"
+}
+
+run() {  # run <op-cache-stub> [env assignments...]
+    local bin=$1; shift
+    env OP_CACHE_BIN="$bin" TMPDIR="$WORK/tmp" "$@" "$TOOL" 2>&1
+    return $?
+}
+
+mkdir -p "$WORK/tmp"
+
+# 1. A warm cache is left alone - no unlock, no prompt.
+warm=$(stub warm 0 'prefetched vaults: 17 unlocked, 0 expired')
+out=$(run "$warm" OP_CACHE_WARM_START=0 OP_CACHE_WARM_END=24)
+check "warm cache does nothing" $([[ "$out" == *"nothing to do"* && "$out" != *"unlock"* ]] && print 1 || print 0) "$out"
+
+# 2. A cold cache warms up.
+cold=$(stub cold 0 'prefetched vaults: 0 unlocked, 0 expired')
+out=$(run "$cold" OP_CACHE_WARM_START=0 OP_CACHE_WARM_END=24)
+check "cold cache runs unlock" $([[ "$out" == *"cache cold, running unlock"* ]] && print 1 || print 0) "$out"
+
+# 3. An unreadable status must NOT be read as cold: that would prompt.
+broken=$(stub broken 1 'irgendein Fehler')
+out=$(run "$broken" OP_CACHE_WARM_START=0 OP_CACHE_WARM_END=24)
+rc=$?
+check "failing status does not unlock" $([[ "$out" == *"status unreadable"* && "$out" != *"running unlock"* ]] && print 1 || print 0) "$out"
+check "failing status exits non-zero" $([[ $rc -ne 0 ]] && print 1 || print 0) "rc=$rc"
+
+reworded=$(stub reworded 0 'vaults prefetched: 17')
+out=$(run "$reworded" OP_CACHE_WARM_START=0 OP_CACHE_WARM_END=24)
+check "reworded status does not unlock" $([[ "$out" == *"status unreadable"* ]] && print 1 || print 0) "$out"
+
+# 4. Outside working hours nothing happens, whatever the cache says.
+out=$(run "$cold" OP_CACHE_WARM_START=23 OP_CACHE_WARM_END=24)
+check "outside hours skips" $([[ "$out" == *"outside 23-24h"* && "$out" != *"unlock"* ]] && print 1 || print 0) "$out"
+
+# 5. A missing op-cache is an error, not a silent pass.
+out=$(env OP_CACHE_BIN=/gibts/nicht TMPDIR="$WORK/tmp" "$TOOL" 2>&1)
+rc=$?
+check "missing op-cache fails loudly" $([[ "$out" == *"not found"* && $rc -ne 0 ]] && print 1 || print 0) "rc=$rc $out"
+
+# 6. A held lock defers; a stale one is broken.
+mkdir -p "$WORK/tmp/op-cache-warm.lock"
+out=$(run "$cold" OP_CACHE_WARM_START=0 OP_CACHE_WARM_END=24)
+check "held lock defers" $([[ "$out" == *"holds the lock"* && "$out" != *"unlock"* ]] && print 1 || print 0) "$out"
+
+touch -t 202601010000 "$WORK/tmp/op-cache-warm.lock"
+out=$(run "$cold" OP_CACHE_WARM_START=0 OP_CACHE_WARM_END=24)
+check "stale lock is broken" $([[ "$out" == *"breaking a stale lock"* && "$out" == *"running unlock"* ]] && print 1 || print 0) "$out"
+check "lock is released afterwards" $([[ ! -d "$WORK/tmp/op-cache-warm.lock" ]] && print 1 || print 0)
+
+print
+if (( failures )); then
+    print "$failures failed"
+    exit 1
+fi
+print "all passed"

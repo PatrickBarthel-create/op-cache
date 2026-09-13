@@ -65,10 +65,16 @@ public struct ProxyRunner: Sendable {
 
         switch call.kind {
         case .passthrough:
-            return try onePassword.passthrough(arguments)
+            // Recorded too, although nothing is cached: `op run`, `op inject`
+            // and `--otp` reach real secrets, and a log that shows only the
+            // cacheable calls cannot answer "what asked for a credential".
+            let status = try onePassword.passthrough(arguments)
+            record(call, hit: false)
+            return status
 
         case .mutating:
             let status = try onePassword.passthrough(arguments)
+            record(call, hit: false)
             // A create or edit can make any cached listing wrong, so the
             // metadata cache is dropped rather than aged out. This is what
             // lets it live without an expiry. Prefetched items go with it:

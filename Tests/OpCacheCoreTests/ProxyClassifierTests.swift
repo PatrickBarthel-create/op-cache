@@ -89,6 +89,24 @@ import Testing
     // A call that names nothing has no subject.
     #expect(ProxyClassifier.classify(["vault", "list"]).subject == nil)
     #expect(ProxyClassifier.classify(["whoami"]).subject == nil)
-    // Never cached, never named.
-    #expect(ProxyClassifier.classify(["item", "get", "GitHub", "--otp"]).subject == nil)
+    // Never cached, but still named: the log has to show that something asked
+    // for this item's one-time password. The code itself is never recorded.
+    #expect(ProxyClassifier.classify(["item", "get", "GitHub", "--otp"]).subject == "GitHub")
+}
+
+@Test func namesUncacheableCallsWithoutLeakingValues() {
+    // op run and op inject reach real secrets; without a subject the audit log
+    // cannot say what they asked for.
+    #expect(ProxyClassifier.classify(["inject", "-i", "t", "-o", "o"]).kind == .passthrough)
+    #expect(ProxyClassifier.classify(["read", "op://E/i/f", "--otp"]).subject == "op://E/i/f")
+    #expect(ProxyClassifier.classify(["item", "get", "GitHub", "--otp"]).subject == "GitHub")
+
+    // An unknown verb path may put a field=value assignment where an item name
+    // would be, so only an op:// reference is taken there.
+    #expect(ProxyClassifier.classify(["item", "edit", "GitHub", "password=geheim"]).kind == .mutating)
+    #expect(ProxyClassifier.classify(["item", "edit", "GitHub", "password=geheim"]).subject == nil)
+    #expect(ProxyClassifier.classify(["item", "create", "--title", "X", "password=geheim"]).subject == nil)
+
+    // A value is never recorded even where the verbs are known.
+    #expect(ProxyClassifier.classify(["item", "get", "password=geheim"]).subject == nil)
 }
