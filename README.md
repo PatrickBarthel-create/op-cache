@@ -259,7 +259,7 @@ make uninstall-warm; make uninstall-notify
 unlocked, or when the last unlock reported a skipped account (the marker in
 `~/.local/state/op-cache-warm/`; a vault count would not do, because empty
 vaults do not count as unlocked). Never while the screen is locked, and never outside
-`OP_CACHE_WARM_START`-`OP_CACHE_WARM_END` (7-23). An unreadable status is an
+`OP_CACHE_WARM_START`-`OP_CACHE_WARM_END` (7-24: the screen lock is the real guard). An unreadable status is an
 error, not a cold cache: a crashed status command must not turn into a
 biometric prompt. The cost is one approval per account every three days -
 plus one after every write to 1Password through `op` (`item edit`, `item
