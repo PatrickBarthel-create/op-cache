@@ -229,6 +229,59 @@ A write failure warns on stderr and does not fail the command. The cache is the
 security boundary; failing closed here would only hand any caller a way to break
 `run` by deleting a file.
 
+### Proxied calls (Everlast fork only)
+
+Every `op` call through the shim is recorded too, cached or not, and each entry
+names what the call asked for: the `op://` reference for `read`, the item name
+(with its vault when one was given) for `item get`, and for a call that names no
+operand - `inject -i file`, `run`, `item list` - the subcommand itself. Never a
+field value: an operand of the form `field=value` is an assignment and is
+dropped, and after a verb `op` does not know the only thing taken is an `op://`
+reference.
+
+## Keeping the cache warm, and hearing what it answers (Everlast fork only)
+
+Once every vault is prefetched nothing prompts, and the prompt was the only
+signal that something read a credential. Two LaunchAgents replace it:
+
+```bash
+make install-warm      # re-runs unlock --all when the prefetch has lapsed
+make install-notify    # watches the audit log and raises notifications
+make uninstall-warm; make uninstall-notify
+```
+
+`op-cache-warm` runs hourly. It warms only when `status _items` shows fewer
+vaults than expected (`OP_CACHE_WARM_MIN_VAULTS`, default 17 - both accounts as
+measured here), never while the screen is locked, and never outside
+`OP_CACHE_WARM_START`-`OP_CACHE_WARM_END` (7-23). An unreadable status is an
+error, not a cold cache: a crashed status command must not turn into a
+biometric prompt. The cost is one approval per account every three days.
+
+`op-cache-notify` runs every minute and raises a macOS notification for:
+
+- a reference or item asked for fewer than `rare_threshold` times (3) in the
+  trailing `rare_window_days` (7) - the class a process you did not expect
+  falls into, since the routine working set is small and repetitive. The
+  banner says which request number this is and lists the least-seen first; the
+  full list goes to `~/Library/Logs/op-cache-notify.log`.
+- more than `rate_threshold` requests (50) in the trailing hour, at most once
+  per `rate_cooldown_minutes` (60).
+
+Settings live in `~/.config/op-cache/notify.json`; every key falls back to its
+default when missing or wrongly typed. Counts live in
+`~/.local/state/op-cache-notify/state.json` (0600), not in the log, so a log
+rotation does not make every routine reference look new. The first run after
+an install only records the baseline and stays silent.
+
+Measured before choosing the burst threshold: the median hour on this machine
+carries 55 requests and the busiest 523, so 50 warns in more than half of all
+working hours. It is what was asked for; raise it once the banner stops
+meaning anything.
+
+Tests: `tools/tests/op-cache-notify-test` and `tools/tests/op-cache-warm-test`
+run both tools against synthetic logs and a stub `op-cache`, so neither test
+ever reaches 1Password.
+
 ## Why not cache a full 1Password session?
 
 A full session would let the agent query any vault item available to your
