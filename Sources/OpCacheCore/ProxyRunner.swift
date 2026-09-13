@@ -151,11 +151,14 @@ public struct ProxyRunner: Sendable {
             return 0
         }
 
+        let startedAt = Date()
         let result = try onePassword.capture(arguments)
         write(result.standardOutput, to: FileHandle.standardOutput)
         write(result.standardError, to: FileHandle.standardError)
 
-        if result.status == 0, !result.standardOutput.isEmpty {
+        // Same guard as the prefetch, same reason: a write that finished
+        // while op was answering makes this answer the pre-write value.
+        if result.status == 0, !result.standardOutput.isEmpty, !ItemStore.invalidated(since: startedAt) {
             store(key, result.standardOutput)
         } else if result.status != 0, MetaCache.indicatesStaleLookup(result.standardError) {
             // The item exists somewhere but not where a cached listing said.
