@@ -183,8 +183,22 @@ public struct ProxyRunner: Sendable {
         }
     }
 
+    /// Whether a result may be stored at all. Two shapes are refused: a JSON
+    /// document with an OTP field (it carries the seed, which must never sit
+    /// in a cache, and a code that is wrong within 30 seconds), and a bare
+    /// six-to-eight-digit line, which is what `--fields <otp-field>` returns
+    /// and cannot be told apart from a PIN by name alone.
+    static func isCacheable(_ value: String) -> Bool {
+        let trimmed = value.trimmingCharacters(in: .newlines)
+        if trimmed.count >= 6, trimmed.count <= 8, trimmed.allSatisfy(\.isNumber) { return false }
+        if trimmed.hasPrefix("{"), let redacted = OTPRedaction.redact(value), redacted != value {
+            return false
+        }
+        return true
+    }
+
     private func storeSecret(key: String, value: String) {
-        guard value.utf8.count <= Self.maximumSecretBytes else { return }
+        guard value.utf8.count <= Self.maximumSecretBytes, Self.isCacheable(value) else { return }
         let now = Date()
         let cached = CachedSecret(
             reference: key,

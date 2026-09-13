@@ -15,7 +15,11 @@
 set -u
 
 OP_CACHE="${OP_CACHE_BIN:-$HOME/.local/bin/op-cache}"
-LOCK="${TMPDIR:-/tmp}/op-cache-warm.lock"
+# Lock and retry stamp live in a fixed per-user directory, not in TMPDIR: the
+# LaunchAgent and a terminal must see the same lock, and TMPDIR is set per
+# session.
+STATE_DIR="${OP_CACHE_WARM_STATE_DIR:-$HOME/.local/state/op-cache-warm}"
+LOCK="$STATE_DIR/op-cache-warm.lock"
 TTL="${OP_CACHE_WARM_TTL:-3d}"
 START_HOUR="${OP_CACHE_WARM_START:-7}"
 END_HOUR="${OP_CACHE_WARM_END:-23}"
@@ -27,11 +31,12 @@ STALE_LOCK_SECONDS="${OP_CACHE_WARM_STALE_LOCK:-1800}"
 MIN_VAULTS="${OP_CACHE_WARM_MIN_VAULTS:-17}"
 # A partial warm-up is retried no more often than this (6h).
 PARTIAL_RETRY_SECONDS="${OP_CACHE_WARM_PARTIAL_RETRY:-21600}"
-RETRY_STAMP="${TMPDIR:-/tmp}/op-cache-warm.last-attempt"
+RETRY_STAMP="$STATE_DIR/op-cache-warm.last-attempt"
 
 log() { print -r -- "$(date '+%Y-%m-%d %H:%M:%S') $*"; }
 
 [[ -x "$OP_CACHE" ]] || { log "op-cache not found at $OP_CACHE"; exit 1; }
+mkdir -p "$STATE_DIR" || { log "cannot create $STATE_DIR"; exit 1; }
 
 hour=$(date +%-H)
 if (( hour < START_HOUR || hour >= END_HOUR )); then

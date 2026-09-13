@@ -457,6 +457,23 @@ check(
     str(notifications),
 )
 
+# 30b. What was written to the old log between the last tick and the rename is
+#      read from `<log>.1` before the new file, and named.
+case = Case()
+case.baseline([entry(600, "op://A/routine/c")])
+case.run([entry(600, "op://A/routine/c")])
+with case.log.open("a") as handle:
+    handle.write(entry(2, "op://F/im-alten-log/c") + "\n")
+case.log.rename(case.log.with_name(case.log.name + ".1"))
+notifications = case.run([entry(1, "op://A/routine/c")])
+check(
+    "the tail of the rotated log is named",
+    len(notifications) == 1 and "im-alten-log" in notifications[0],
+    str(notifications),
+)
+second = case.run([entry(1, "op://A/routine/c"), entry(0.5, "op://G/danach/c")])
+check("after the rotation counting continues", len(second) == 1 and "danach" in second[0], str(second))
+
 # 31. Direction-override characters cannot reshape the banner text.
 case = Case()
 case.baseline([entry(600, "op://A/routine/c")])

@@ -53,6 +53,7 @@ public enum ProxyClassifier {
         "--otp",           // time-based, a cached value is wrong within 30s
         "--session",       // caller manages its own session
         "--watch",         // streams
+        "--share-link",    // creates a share link in 1Password: a side effect
         "-",               // stdin
     ]
 
@@ -130,9 +131,13 @@ public enum ProxyClassifier {
 
         // `--session=TOKEN` is the same flag as `--session TOKEN` and must not
         // slip past into the cache.
+        // Three spellings ask for a one-time code: `--otp`, a reference with
+        // `?attribute=otp`, and `--fields type=otp`. All three are time-based.
         if arguments.contains(where: { argument in
             neverCacheFlags.contains(argument)
                 || neverCacheFlags.contains(where: { argument.hasPrefix($0 + "=") })
+                || argument.lowercased().contains("attribute=otp")
+                || argument.lowercased().contains("type=otp")
         }) {
             return ClassifiedCall(
                 kind: .passthrough, key: nil, subcommand: subcommand,
@@ -212,7 +217,7 @@ public enum ProxyClassifier {
             "--out-file", "--file-mode", "--categories", "--tags",
             // Filters of the listings. A value here that happens to be a
             // command word would otherwise be read as a verb.
-            "--group", "--user", "--permission",
+            "--group", "--user", "--permission", "--output",
             // Short forms op documents. `-o file` before the reference would
             // otherwise make the file name the subject.
             "-o", "-i", "-t", "-c",

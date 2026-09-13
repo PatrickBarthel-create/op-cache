@@ -38,7 +38,7 @@ stub() {  # stub <name> <exit> <output...>
 
 run() {  # run <op-cache-stub> [env assignments...]
     local bin=$1; shift
-    env OP_CACHE_WARM_SCREEN_LOCKED_CMD=false OP_CACHE_BIN="$bin" TMPDIR="$WORK/tmp" "$@" "$TOOL" 2>&1
+    env OP_CACHE_WARM_SCREEN_LOCKED_CMD=false OP_CACHE_BIN="$bin" OP_CACHE_WARM_STATE_DIR="$WORK/tmp" "$@" "$TOOL" 2>&1
     return $?
 }
 
@@ -78,7 +78,7 @@ out=$(run "$cold" OP_CACHE_WARM_START=23 OP_CACHE_WARM_END=24)
 check "outside hours skips" $([[ "$out" == *"outside 23-24h"* && "$out" != *"unlock"* ]] && print 1 || print 0) "$out"
 
 # 5. A missing op-cache is an error, not a silent pass.
-out=$(env OP_CACHE_WARM_SCREEN_LOCKED_CMD=false OP_CACHE_BIN=/gibts/nicht TMPDIR="$WORK/tmp" "$TOOL" 2>&1)
+out=$(env OP_CACHE_WARM_SCREEN_LOCKED_CMD=false OP_CACHE_BIN=/gibts/nicht OP_CACHE_WARM_STATE_DIR="$WORK/tmp" "$TOOL" 2>&1)
 rc=$?
 check "missing op-cache fails loudly" $([[ "$out" == *"not found"* && $rc -ne 0 ]] && print 1 || print 0) "rc=$rc $out"
 
@@ -121,7 +121,7 @@ slow=$(stub slow 0 'prefetched vaults: 0 unlocked, 0 expired')
     print 'if [ "$1" = "status" ]; then echo "prefetched vaults: 0 unlocked, 0 expired"; exit 0; fi'
     print 'sleep 60'
 } > "$slow"
-env OP_CACHE_WARM_SCREEN_LOCKED_CMD=false OP_CACHE_BIN="$slow" TMPDIR="$WORK/tmp" OP_CACHE_WARM_START=0 OP_CACHE_WARM_END=24 OP_CACHE_WARM_PARTIAL_RETRY=0 "$TOOL" >/dev/null 2>&1 &
+env OP_CACHE_WARM_SCREEN_LOCKED_CMD=false OP_CACHE_BIN="$slow" OP_CACHE_WARM_STATE_DIR="$WORK/tmp" OP_CACHE_WARM_START=0 OP_CACHE_WARM_END=24 OP_CACHE_WARM_PARTIAL_RETRY=0 "$TOOL" >/dev/null 2>&1 &
 script=$!
 sleep 1
 holder=$(cat "$WORK/tmp/op-cache-warm.lock/pid" 2>/dev/null)
@@ -147,7 +147,7 @@ out=$(run "$short" OP_CACHE_WARM_START=0 OP_CACHE_WARM_END=24)
 check "a short result after unlock is logged" $([[ "$out" == *"still 13 of 17 vaults after a full unlock"* ]] && print 1 || print 0) "$out"
 
 # 9. A locked screen skips, whatever the cache says.
-out=$(env OP_CACHE_WARM_SCREEN_LOCKED_CMD=true OP_CACHE_BIN="$cold" TMPDIR="$WORK/tmp" OP_CACHE_WARM_START=0 OP_CACHE_WARM_END=24 "$TOOL" 2>&1)
+out=$(env OP_CACHE_WARM_SCREEN_LOCKED_CMD=true OP_CACHE_BIN="$cold" OP_CACHE_WARM_STATE_DIR="$WORK/tmp" OP_CACHE_WARM_START=0 OP_CACHE_WARM_END=24 "$TOOL" 2>&1)
 check "locked screen skips" $([[ "$out" == *"screen locked"* && "$out" != *"running unlock"* ]] && print 1 || print 0) "$out"
 
 print

@@ -215,3 +215,12 @@ import Testing
     #expect(ProxyClassifier.classify(["item", "get", ""]).subject == "item get")
     #expect(ProxyClassifier.classify(["item", "get", "--vault", "", "GitHub"]).subject == "GitHub")
 }
+
+@Test func everySpellingOfAOneTimeCodeIsNeverCached() {
+    // Sixth adversarial round: `--otp` was the only spelling caught.
+    #expect(ProxyClassifier.classify(["read", "op://E/i/einmaliges Passwort?attribute=otp"]).kind == .passthrough)
+    #expect(ProxyClassifier.classify(["item", "get", "X", "--fields", "type=otp"]).kind == .passthrough)
+    #expect(ProxyClassifier.classify(["item", "get", "X", "--fields", "type=OTP"]).kind == .passthrough)
+    #expect(ProxyClassifier.classify(["item", "get", "X", "--share-link"]).kind == .passthrough)
+    #expect(ProxyClassifier.classify(["document", "get", "--output", "file", "X"]).subject == "X")
+}

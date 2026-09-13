@@ -247,7 +247,7 @@ class SingleRun:
 
 
 def read_new_entries(
-    offset: int, after: datetime | None, now: datetime
+    path: Path, offset: int, after: datetime | None, now: datetime
 ) -> tuple[list[tuple[dict, datetime]], int]:
     """Entries written since the last run, with the log's size. Two guards,
     because either can be wrong on its own: the byte offset misses nothing but
@@ -255,7 +255,7 @@ def read_new_entries(
     but has one-second resolution."""
     entries: list[tuple[dict, datetime]] = []
     size = 0
-    with LOG.open("rb") as handle:
+    with path.open("rb") as handle:
         for raw in handle:
             start = size
             size += len(raw)
@@ -325,14 +325,31 @@ def main() -> int:
             # Size alone misses a new log that has already outgrown the old
             # offset by the time the watcher looks again.
             stat = LOG.stat()
-            rotated = stat.st_size < offset or (
-                isinstance(state.get("inode"), int) and state["inode"] != stat.st_ino
-            )
-            if rotated:
+            old_inode = state.get("inode") if isinstance(state.get("inode"), int) else None
+            rotated = stat.st_size < offset or (old_inode is not None and old_inode != stat.st_ino)
+            entries = []
+            if rotated and not first_run:
+                # The rotated file keeps whatever was written between the last
+                # tick and the rename. op-cache moves it to `<log>.1`; when that
+                # is the file the offset belongs to, finish reading it first.
+                previous = LOG.with_name(LOG.name + ".1")
+                tail_read = False
+                try:
+                    if previous.stat().st_ino == old_inode:
+                        entries, _ = read_new_entries(previous, offset, None, now)
+                        tail_read = True
+                except OSError:
+                    pass
                 offset = 0
-            entries, size = read_new_entries(
-                0 if first_run else offset, last_seen if rotated else None, now
+                # With the tail accounted for, the new file is new from its
+                # first byte and needs no timestamp guard; without it the
+                # guard is what keeps the old entries from counting twice.
+                if tail_read:
+                    last_seen = None
+            fresh, size = read_new_entries(
+                LOG, 0 if first_run else offset, last_seen if rotated else None, now
             )
+            entries += fresh
         except OSError as error:
             warn(f"log unreadable: {error}")
             return 0
