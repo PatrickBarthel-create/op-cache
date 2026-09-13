@@ -37,7 +37,12 @@ public struct ClassifiedCall: Equatable, Sendable {
         self.kind = kind
         self.key = key
         self.subcommand = subcommand
-        self.subject = subject
+        // A call that names no operand still did something: `op inject -i
+        // file` reads references from the file, `op item list` enumerates a
+        // vault. The subcommand stands in, so a watcher counting "what asked"
+        // sees the call rather than a blank. Nothing to fall back on for a
+        // bare `op --version`, and that is fine: it reaches nothing.
+        self.subject = subject ?? (subcommand.isEmpty ? nil : subcommand)
     }
 }
 
@@ -152,11 +157,25 @@ public enum ProxyClassifier {
                 index += 1
                 continue
             }
+            // The subcommand path ends at the first word `op` does not know as
+            // one. Past it come operands, and `item edit password=x` puts a
+            // secret third - the subcommand is written to the audit log, so it
+            // must never reach that far.
+            guard commandWords.contains(argument) else { break }
             verbs.append(argument)
             index += 1
         }
         return verbs
     }
+
+    /// Every word that can appear in a subcommand path.
+    private static let commandWords: Set<String> = {
+        var words = mutatingVerbs.union(passthroughCommands)
+        for command in metadataCommands.union(secretCommands) {
+            for word in command.split(separator: " ") { words.insert(String(word)) }
+        }
+        return words
+    }()
 
     private static func flagTakesValue(_ flag: String) -> Bool {
         [

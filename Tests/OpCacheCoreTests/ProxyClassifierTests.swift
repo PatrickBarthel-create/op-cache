@@ -86,9 +86,10 @@ import Testing
     // A flag value is never mistaken for the operand.
     #expect(ProxyClassifier.classify(["read", "--account", "everlast", "op://E/i/f"]).subject
         == "op://E/i/f")
-    // A call that names nothing has no subject.
-    #expect(ProxyClassifier.classify(["vault", "list"]).subject == nil)
-    #expect(ProxyClassifier.classify(["whoami"]).subject == nil)
+    // A call that names no operand is recorded as what it did.
+    #expect(ProxyClassifier.classify(["vault", "list"]).subject == "vault list")
+    #expect(ProxyClassifier.classify(["whoami"]).subject == "whoami")
+    #expect(ProxyClassifier.classify(["--version"]).subject == nil)
     // Never cached, but still named: the log has to show that something asked
     // for this item's one-time password. The code itself is never recorded.
     #expect(ProxyClassifier.classify(["item", "get", "GitHub", "--otp"]).subject == "GitHub")
@@ -102,11 +103,28 @@ import Testing
     #expect(ProxyClassifier.classify(["item", "get", "GitHub", "--otp"]).subject == "GitHub")
 
     // An unknown verb path may put a field=value assignment where an item name
-    // would be, so only an op:// reference is taken there.
-    #expect(ProxyClassifier.classify(["item", "edit", "GitHub", "password=geheim"]).kind == .mutating)
-    #expect(ProxyClassifier.classify(["item", "edit", "GitHub", "password=geheim"]).subject == nil)
-    #expect(ProxyClassifier.classify(["item", "create", "--title", "X", "password=geheim"]).subject == nil)
+    // would be, so only an op:// reference is taken there; otherwise the call
+    // is recorded as what it did, never as what it carried.
+    let edit = ProxyClassifier.classify(["item", "edit", "GitHub", "password=geheim"])
+    #expect(edit.kind == .mutating)
+    #expect(edit.subject == "item edit")
+    let create = ProxyClassifier.classify(["item", "create", "--title", "X", "password=geheim"])
+    #expect(create.subject == "item create")
+    #expect(ProxyClassifier.classify(["inject", "-i", "t.tpl"]).subject == "inject")
+    #expect(ProxyClassifier.classify(["run", "--", "env"]).subject == "run")
 
     // A value is never recorded even where the verbs are known.
-    #expect(ProxyClassifier.classify(["item", "get", "password=geheim"]).subject == nil)
+    #expect(ProxyClassifier.classify(["item", "get", "password=geheim"]).subject == "item get")
+    #expect(ProxyClassifier.classify(["item", "edit", "op://E/i/f", "password=geheim"]).subject == "op://E/i/f")
+}
+
+@Test func subcommandNeverCarriesAnOperand() {
+    // The subcommand is written to the audit log. An unknown-verb path used to
+    // take up to three operands, so `item edit password=x` logged the value.
+    #expect(ProxyClassifier.classify(["item", "edit", "password=geheim"]).subcommand == "item edit")
+    #expect(ProxyClassifier.classify(["item", "edit", "GitHub", "password=geheim"]).subcommand == "item edit")
+    #expect(ProxyClassifier.classify(["inject", "-i", "t.tpl"]).subcommand == "inject")
+    #expect(ProxyClassifier.classify(["run", "--", "env"]).subcommand == "run")
+    #expect(ProxyClassifier.classify(["item", "get", "GitHub"]).subcommand == "item get")
+    #expect(ProxyClassifier.classify(["something", "new"]).subcommand == "")
 }
