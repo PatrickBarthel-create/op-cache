@@ -258,9 +258,11 @@ error, not a cold cache: a crashed status command must not turn into a
 biometric prompt. The cost is one approval per account every three days -
 plus one after every write to 1Password through `op` (`item edit`, `item
 create`, …): a write drops the prefetch, because a renamed or rotated item
-must not be answered from a stale copy, and the proxy then kicks the agent so
-the rebuild happens while you are still at the keyboard. A partial warm-up
-(one account did not approve) is retried at most every six hours.
+must not be answered from a stale copy (the digest cache goes with it), and
+the proxy then kicks the agent so the rebuild happens while you are still at
+the keyboard - subject to the same screen-lock and working-hours rules as any
+run. A partial warm-up (one account did not approve) is retried at most every
+six hours.
 
 `op-cache-notify` runs every minute and raises a macOS notification for:
 

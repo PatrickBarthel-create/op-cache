@@ -83,6 +83,10 @@ public struct ProxyRunner: Sendable {
             if status == 0 {
                 meta.clear()
                 items.clear()
+                // The digest cache holds the same values under a different key
+                // and is consulted first; left alone it would answer
+                // `op read` with the pre-edit value for the rest of its TTL.
+                try? keychain.clear(profile: Self.profileName)
                 // The prefetch is gone now, and every call until it is rebuilt
                 // prompts. Ask the warm-up agent to rebuild it right away: the
                 // person who just edited 1Password is at the keyboard, which

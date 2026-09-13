@@ -140,3 +140,39 @@ import Testing
     // `read` without a reference is a mistake and names nothing but itself.
     #expect(ProxyClassifier.classify(["read", "geheimwert"]).subject == "read")
 }
+
+@Test func booleanGlobalFlagsDoNotSwallowTheNextFlag() {
+    // Third adversarial round: `--iso-timestamps` and `--include-archive` are
+    // boolean in op 2.34; listed as value flags they made the session token
+    // an operand, and the operand is what the audit log records.
+    for boolean in ["--iso-timestamps", "--include-archive"] {
+        let call = ProxyClassifier.classify(["item", "get", boolean, "--session", "SESSIONTOKEN", "GitHub"])
+        #expect(call.kind == .passthrough)
+        #expect(call.subject == "GitHub")
+        #expect(ProxyClassifier.classify(["item", "get", boolean, "GitHub"]).subject == "GitHub")
+        #expect(ProxyClassifier.classify(["item", "get", boolean, "--vault", "Employee", "GitHub"]).subject
+            == "Employee/GitHub")
+        #expect(ProxyClassifier.classify(["item", "list", boolean, "--format", "json"]).subject == "item list")
+    }
+    #expect(ProxyClassifier.classify(["read", "--iso-timestamps", "-o", "f", "op://a/b/c"]).subject == "op://a/b/c")
+}
+
+@Test func aFlagValueIsNeverASubjectWhateverLetItThrough() {
+    // Belt and braces: even if a future flag is misclassified, a subject that
+    // equals a value the caller handed to a flag is dropped.
+    #expect(ProxyClassifier.classify(["item", "get", "--vault", "Employee", "--session", "TOKEN", "TOKEN"]).subject == "item get")
+    #expect(ProxyClassifier.classify(["item", "get", "--account=TOKEN", "TOKEN"]).subject == "item get")
+}
+
+@Test func listingsNeverNameAStrayOperand() {
+    for command in [["account", "list"], ["item", "list"], ["vault", "list"], ["whoami"],
+                    ["item", "template", "list"], ["user", "list"], ["group", "list"]] {
+        let call = ProxyClassifier.classify(command + ["geheimwert"])
+        #expect(call.subject == command.joined(separator: " "), "\(command)")
+    }
+}
+
+@Test func inlineSessionFlagIsNeverCached() {
+    #expect(ProxyClassifier.classify(["read", "--session=TOKEN", "op://a/b/c"]).kind == .passthrough)
+    #expect(ProxyClassifier.classify(["item", "get", "--session=TOKEN", "X"]).kind == .passthrough)
+}

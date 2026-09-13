@@ -376,6 +376,40 @@ check(
     case.run(old + [entry(1, "item list", kind="metadata")]) == [],
 )
 
+# ---- Findings of the third adversarial round ----
+
+# 25. `run` and `unlock` events have no cacheKind and reach secrets all the same.
+for event in ("run", "unlock"):
+    case = Case()
+    case.baseline([entry(600, "op://E/routine/c")])
+    line = json.loads(entry(1, "op://E/profil-secret/c"))
+    line["event"] = event
+    del line["cacheKind"]
+    notifications = case.run([entry(600, "op://E/routine/c"), json.dumps(line)])
+    check(
+        f"{event} events are named",
+        len(notifications) == 1 and "profil-secret" in notifications[0],
+        str(notifications),
+    )
+
+# 26. A burst leaves a durable line on stdout, not only a banner.
+case = Case({"rare_threshold": 0, "rate_threshold": 50})
+case.baseline([])
+lines = [entry(30, f"op://E/i{i}/c") for i in range(60)]
+case.log.write_text("\n".join(lines) + "\n")
+environment = dict(os.environ)
+environment.update(
+    {
+        "OP_CACHE_AUDIT_LOG": str(case.log),
+        "OP_CACHE_NOTIFY_STATE": str(case.state),
+        "OP_CACHE_NOTIFY_CONFIG": str(case.config),
+    }
+)
+out = subprocess.run(
+    [sys.executable, str(TOOL), "--dry-run"], capture_output=True, text=True, env=environment
+).stdout
+check("a burst is recorded on stdout", any(l.startswith("BURST\t60\t50") for l in out.splitlines()), out)
+
 print()
 if failures:
     print(f"{len(failures)} failed: {', '.join(failures)}")

@@ -156,9 +156,20 @@ def subjects_of(entry: dict) -> list[str]:
     return []
 
 
+def reaches_a_secret(entry: dict) -> bool:
+    """Whether the entry is worth naming. Proxy calls carry a kind; `run`
+    injects a whole profile into a child and `unlock` fetches one, and neither
+    has a kind - both reach secrets all the same."""
+    if entry.get("event") in ("run", "unlock"):
+        return True
+    return entry.get("cacheKind") in NAMED_KINDS
+
+
 def notify(title: str, message: str) -> bool:
     """Raise the banner. Returns whether it was handed to the system - a caller
-    that records "warned" must not do so on a failed osascript."""
+    that records "warned" must not do so on a failed osascript. Handed to is
+    all that can be known: when Notification Center declines to show a banner
+    (TCC), osascript still exits 0. The stdout lines are the durable record."""
     if DRY_RUN:
         print(f"NOTIFY\t{title}\t{message}")
         return True
@@ -312,7 +323,7 @@ def main() -> int:
                 history[subject] = seen
                 if (
                     not first_run
-                    and entry.get("cacheKind") in NAMED_KINDS
+                    and reaches_a_secret(entry)
                     and before < rare_threshold
                     and subject not in rare
                 ):
@@ -354,6 +365,9 @@ def main() -> int:
         # The baseline run is silent on this too; a burst that was already
         # under way when the watcher started is reported on the next tick.
         if not first_run and len(requests) > rate_threshold and now - last_alert >= cooldown:
+            # On stdout as well: a banner leaves no trace once dismissed, and
+            # osascript exits 0 even when the system declined to show it.
+            print(f"BURST\t{len(requests)}\t{rate_threshold}")
             delivered = notify(
                 "op-cache: ungewöhnlich viele Abfragen",
                 f"{len(requests)} Anfragen in der letzten Stunde (Schwelle {rate_threshold})",

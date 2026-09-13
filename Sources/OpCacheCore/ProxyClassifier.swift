@@ -111,7 +111,12 @@ public enum ProxyClassifier {
             )
         }
 
-        if arguments.contains(where: { neverCacheFlags.contains($0) }) {
+        // `--session=TOKEN` is the same flag as `--session TOKEN` and must not
+        // slip past into the cache.
+        if arguments.contains(where: { argument in
+            neverCacheFlags.contains(argument)
+                || neverCacheFlags.contains(where: { argument.hasPrefix($0 + "=") })
+        }) {
             return ClassifiedCall(
                 kind: .passthrough, key: nil, subcommand: subcommand,
                 subject: knownVerbCount(verbs).map { subject(arguments, verbCount: $0) }
@@ -177,15 +182,41 @@ public enum ProxyClassifier {
         return words
     }()
 
+    /// Flags that take a value in op 2.34. `--iso-timestamps` and
+    /// `--include-archive` are boolean there and were wrongly listed before:
+    /// each swallowed the flag after it, so `--iso-timestamps --session TOKEN`
+    /// turned the session token into an operand - and into the audit log.
     private static func flagTakesValue(_ flag: String) -> Bool {
         [
             "--account", "--vault", "--fields", "--format", "--session",
-            "--cache-key", "--config", "--iso-timestamps", "--encoding",
-            "--out-file", "--file-mode", "--categories", "--tags", "--include-archive",
+            "--cache-key", "--config", "--encoding",
+            "--out-file", "--file-mode", "--categories", "--tags",
             // Short forms op documents. `-o file` before the reference would
             // otherwise make the file name the subject.
             "-o", "-i", "-t", "-c",
         ].contains(flag)
+    }
+
+    /// Subcommands that take no operand at all. Whatever follows them is a
+    /// mistake, and a mistyped command line is exactly the one that carries
+    /// something meant for another program.
+    private static let operandlessCommands: Set<String> = [
+        "whoami", "account list", "vault list", "item list", "item template list",
+        "user list", "group list", "events-api list",
+    ]
+
+    /// Values the caller handed to flags. A subject that equals one of them is
+    /// a flag value in disguise, whatever parsing mistake let it through.
+    private static func flagValues(_ arguments: [String]) -> Set<String> {
+        var values: Set<String> = []
+        for (index, argument) in arguments.enumerated() where argument.hasPrefix("-") {
+            if let equals = argument.firstIndex(of: "=") {
+                values.insert(String(argument[argument.index(after: equals)...]))
+            } else if index + 1 < arguments.count, flagTakesValue(argument) {
+                values.insert(arguments[index + 1])
+            }
+        }
+        return values
     }
 
     /// How many leading operands are a known subcommand path, or nil when the
@@ -234,11 +265,17 @@ public enum ProxyClassifier {
 
         guard operands.count > verbCount else { return nil }
         let operand = operands[verbCount]
+        // A flag value that reached the operands through some parsing gap is
+        // still a flag value. `--session TOKEN` must never come out as a subject.
+        if flagValues(arguments).contains(operand) { return nil }
         if operand.hasPrefix("op://") { return operand }
-        // `read` takes references only. Anything else there is a mistake, and
-        // a mistyped command line is the one most likely to carry something
-        // that was meant for another program.
+        // `read` takes references only, and the listings take nothing at all.
+        // Anything else there is a mistake, and a mistyped command line is the
+        // one most likely to carry something meant for another program.
         if operands.first == "read" { return nil }
+        if operandlessCommands.contains(operands.prefix(verbCount).joined(separator: " ")) {
+            return nil
+        }
         // `field=value` is an assignment, and its right-hand side is a secret
         // being written. Never recorded, whatever position it appears in -
         // including as the value of `--vault`, where op would reject it but
