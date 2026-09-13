@@ -1,0 +1,62 @@
+#!/bin/zsh
+# Keep the prefetched item cache warm, so op calls are answered without an
+# approval prompt.
+#
+# Everlast fork only. `unlock --all` holds for the TTL (3d, the fork's cap) and
+# then silently lapses; every call after that prompts again, which is what made
+# the prompts come back after a single manual unlock. This runs on a timer and
+# re-warms only when the cache has actually run dry, so the cost is one Touch ID
+# every few days rather than one per call.
+#
+# It deliberately does nothing while the screen is locked or outside working
+# hours: the unlock needs a biometric approval, and a dialog nobody is there to
+# answer is worse than a cold cache.
+
+set -u
+
+OP_CACHE="${OP_CACHE_BIN:-$HOME/.local/bin/op-cache}"
+LOCK="${TMPDIR:-/tmp}/op-cache-warm.lock"
+TTL="${OP_CACHE_WARM_TTL:-3d}"
+START_HOUR="${OP_CACHE_WARM_START:-7}"
+END_HOUR="${OP_CACHE_WARM_END:-23}"
+
+log() { print -r -- "$(date '+%Y-%m-%d %H:%M:%S') $*"; }
+
+[[ -x "$OP_CACHE" ]] || { log "op-cache not found at $OP_CACHE"; exit 1; }
+
+hour=$(date +%-H)
+if (( hour < START_HOUR || hour >= END_HOUR )); then
+    log "outside ${START_HOUR}-${END_HOUR}h, skipping"
+    exit 0
+fi
+
+if ioreg -n Root -d1 -a 2>/dev/null | grep -q 'CGSSessionScreenIsLocked'; then
+    log "screen locked, skipping"
+    exit 0
+fi
+
+# One warm-up at a time: the unlock takes minutes and the timer fires hourly.
+if ! mkdir "$LOCK" 2>/dev/null; then
+    log "another warm-up holds the lock, skipping"
+    exit 0
+fi
+trap 'rmdir "$LOCK" 2>/dev/null' EXIT INT TERM
+
+# Not named `status`: zsh reserves it as a read-only alias for `$?`, and the
+# assignment fails at run time rather than at parse time.
+items_status=$("$OP_CACHE" status _items 2>&1)
+unlocked=$(print -r -- "$items_status" | sed -n 's/^prefetched vaults: \([0-9][0-9]*\) unlocked.*/\1/p')
+
+if [[ -n "$unlocked" && "$unlocked" != "0" ]]; then
+    log "cache warm ($unlocked vaults), nothing to do"
+    exit 0
+fi
+
+log "cache cold, running unlock --all --ttl $TTL"
+if "$OP_CACHE" unlock --all --ttl "$TTL"; then
+    log "warm: $("$OP_CACHE" status _items | head -1)"
+else
+    code=$?
+    log "unlock failed with exit $code"
+    exit $code
+fi

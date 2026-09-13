@@ -1,0 +1,225 @@
+#!/usr/bin/env python3
+"""Watch the op-cache audit log and raise a macOS notification for the two
+things a permanently open cache can no longer show by itself.
+
+Everlast fork only. With `unlock --all` refreshed on a timer, secrets are
+served without any approval prompt, so the prompt no longer works as a signal
+that something read a credential. This restores a signal without restoring the
+friction:
+
+  * an `op://` reference fetched fewer than `rare_threshold` times in the
+    trailing week - the class a foreign process would fall into, since the
+    routine working set is small and repetitive.
+  * more than `rate_threshold` requests within the trailing hour - a burst,
+    whatever asked for it.
+
+It reads only the audit log, never the Keychain, and the log holds references
+and item names, never field values.
+
+Runs from a LaunchAgent every minute; state lives in
+~/.local/state/op-cache-notify/state.json.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import sys
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+def path_from(variable: str, default: str) -> Path:
+    return Path(os.path.expanduser(os.environ.get(variable, default)))
+
+
+LOG = path_from("OP_CACHE_AUDIT_LOG", "~/Library/Logs/op-cache-audit.jsonl")
+STATE = path_from("OP_CACHE_NOTIFY_STATE", "~/.local/state/op-cache-notify/state.json")
+CONFIG = path_from("OP_CACHE_NOTIFY_CONFIG", "~/.config/op-cache/notify.json")
+# Prints the notifications it would raise instead of raising them. The tests
+# and a hand check need to see the text without a banner on every run.
+DRY_RUN = "--dry-run" in sys.argv
+
+DEFAULTS = {
+    # Fewer than this many fetches of the same reference in the trailing week
+    # makes the fetch worth showing.
+    "rare_threshold": 3,
+    "rare_window_days": 7,
+    # How far back a run will report. Bounds the catch-up after downtime and,
+    # on a first run with no state, stops a week of routine fetches arriving as
+    # notifications at once.
+    "catchup_minutes": 60,
+    # Requests in the trailing hour above this raise a burst warning.
+    "rate_threshold": 50,
+    # Never repeat the burst warning more often than this.
+    "rate_cooldown_minutes": 60,
+    # One notification per run at most; more subjects than this are summarised.
+    "max_named_subjects": 4,
+    "enabled": True,
+}
+
+# Call kinds that return secret material. Metadata listings are counted for the
+# burst check but never named: they carry no credential.
+SECRET_KINDS = {"secret", "item-store"}
+
+
+def load_config() -> dict:
+    config = dict(DEFAULTS)
+    try:
+        config.update(json.loads(CONFIG.read_text()))
+    except FileNotFoundError:
+        pass
+    except (OSError, ValueError) as error:
+        warn(f"config ignored: {error}")
+    return config
+
+
+def load_state() -> dict:
+    try:
+        return json.loads(STATE.read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def save_state(state: dict) -> None:
+    STATE.parent.mkdir(parents=True, exist_ok=True)
+    tmp = STATE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(state))
+    tmp.replace(STATE)
+
+
+def warn(message: str) -> None:
+    print(f"op-cache-notify: {message}", file=sys.stderr)
+
+
+def parse_time(value: str) -> datetime | None:
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except (AttributeError, ValueError):
+        return None
+
+
+def read_entries(cut: datetime) -> tuple[list[tuple[int, dict, datetime]], int]:
+    """Every entry at or after `cut`, each with the byte offset it ended at,
+    plus the size of the log. Offsets are what tells a new entry from one this
+    run has already seen."""
+    entries: list[tuple[int, dict, datetime]] = []
+    size = 0
+    with LOG.open("rb") as handle:
+        for raw in handle:
+            size += len(raw)
+            try:
+                entry = json.loads(raw)
+            except ValueError:
+                continue
+            stamp = parse_time(entry.get("timestamp", ""))
+            if stamp is None or stamp < cut:
+                continue
+            entries.append((size, entry, stamp))
+    return entries, size
+
+
+def subjects_of(entry: dict) -> list[str]:
+    return [
+        secret["reference"]
+        for secret in entry.get("secrets") or []
+        if isinstance(secret, dict) and secret.get("reference")
+    ]
+
+
+def notify(title: str, message: str) -> None:
+    if DRY_RUN:
+        print(f"NOTIFY\t{title}\t{message}")
+        return
+
+    # osascript keeps this dependency-free. Quotes are the only metacharacter
+    # that matters inside an AppleScript string literal.
+    def quote(text: str) -> str:
+        return text.replace("\\", "\\\\").replace('"', '\\"')
+
+    script = (
+        f'display notification "{quote(message)}" '
+        f'with title "{quote(title)}"'
+    )
+    try:
+        subprocess.run(["osascript", "-e", script], check=True, capture_output=True)
+    except (OSError, subprocess.CalledProcessError) as error:
+        warn(f"notification failed: {error}")
+
+
+def main() -> int:
+    config = load_config()
+    if not config.get("enabled", True):
+        return 0
+    if not LOG.exists():
+        return 0
+
+    now = datetime.now(timezone.utc)
+    window = timedelta(days=int(config["rare_window_days"]))
+    entries, size = read_entries(now - window)
+
+    state = load_state()
+    # A shrunken log means it was rotated or truncated; start from its front
+    # rather than skipping everything written since.
+    offset = state.get("offset", 0)
+    if offset > size:
+        offset = 0
+
+    # "Fewer than N times this week" is counted over the whole window, not just
+    # over what this run happens to see as new. The offset decides what gets
+    # reported; it must not decide what counts as routine, or the first run
+    # after an install would name a week's worth of routine fetches.
+    rare_threshold = int(config["rare_threshold"])
+    catchup = now - timedelta(minutes=int(config["catchup_minutes"]))
+    seen: dict[str, int] = {}
+    rare: dict[str, int] = {}
+    for end, entry, stamp in entries:
+        for subject in subjects_of(entry):
+            before = seen.get(subject, 0)
+            seen[subject] = before + 1
+            if (
+                end > offset
+                and stamp >= catchup
+                and entry.get("cacheKind") in SECRET_KINDS
+                and before < rare_threshold
+                and subject not in rare
+            ):
+                rare[subject] = before
+
+    if rare:
+        limit = int(config["max_named_subjects"])
+        names = sorted(rare)
+        if len(names) <= limit:
+            body = ", ".join(names)
+        else:
+            body = ", ".join(names[:limit]) + f" und {len(names) - limit} weitere"
+        days = int(config["rare_window_days"])
+        notify(
+            f"op-cache: {len(names)} seltene Abfrage" + ("n" if len(names) > 1 else ""),
+            f"{body} — unter {rare_threshold}x in {days} Tagen geholt",
+        )
+
+    # Burst check over everything, cached or not: the question is how much was
+    # asked for, not how much reached 1Password.
+    hour_ago = now - timedelta(hours=1)
+    in_hour = sum(1 for _, _, stamp in entries if stamp >= hour_ago)
+    rate_threshold = int(config["rate_threshold"])
+    last_alert = parse_time(state.get("last_rate_alert", "")) or datetime.min.replace(
+        tzinfo=timezone.utc
+    )
+    cooldown = timedelta(minutes=int(config["rate_cooldown_minutes"]))
+    if in_hour > rate_threshold and now - last_alert >= cooldown:
+        notify(
+            "op-cache: ungewöhnlich viele Abfragen",
+            f"{in_hour} Anfragen in der letzten Stunde (Schwelle {rate_threshold})",
+        )
+        state["last_rate_alert"] = now.isoformat().replace("+00:00", "Z")
+
+    state["offset"] = size
+    state["last_run"] = now.isoformat().replace("+00:00", "Z")
+    save_state(state)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -189,13 +189,18 @@ public struct ProxyRunner: Sendable {
         handle.write(Data(text.utf8))
     }
 
+    /// The subject is the `op://` reference or item name the caller spelled -
+    /// never a field value. Without it the log counts approvals but cannot say
+    /// which secret was asked for, which is what a watcher needs to tell a
+    /// routine fetch from a first-time one.
     private func record(_ call: ClassifiedCall, hit: Bool, kind: String? = nil) {
+        let secrets = call.subject.map { [AuditSecret(name: call.subcommand, reference: $0)] } ?? []
         audit.record(
             AuditEvent(
                 event: .proxy,
                 profile: Self.profileName,
                 account: "",
-                secrets: [],
+                secrets: secrets,
                 ttl: call.kind == .secret ? ttlText : nil,
                 subcommand: call.subcommand,
                 cacheKind: kind ?? call.kind.rawValue,

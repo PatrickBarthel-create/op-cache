@@ -26,11 +26,18 @@ public struct ClassifiedCall: Equatable, Sendable {
     /// Leading subcommand path, e.g. "item get". Recorded in the audit log so
     /// the log stays readable without ever holding argument values.
     public let subcommand: String
+    /// What the call asks for, in the caller's own spelling: an `op://`
+    /// reference, or an item name or ID with its vault where one was given.
+    /// Recorded so the log answers "which secret", not just "how many".
+    /// Never a field value - `op` takes references and names on the command
+    /// line, never secret material, and `--otp` is classified passthrough.
+    public let subject: String?
 
-    public init(kind: CallKind, key: String?, subcommand: String) {
+    public init(kind: CallKind, key: String?, subcommand: String, subject: String? = nil) {
         self.kind = kind
         self.key = key
         self.subcommand = subcommand
+        self.subject = subject
     }
 }
 
@@ -101,10 +108,20 @@ public enum ProxyClassifier {
 
         // Longest match first so "item template list" wins over "item".
         for candidate in prefixes(of: verbs) where secretCommands.contains(candidate) {
-            return ClassifiedCall(kind: .secret, key: cacheKey(arguments), subcommand: candidate)
+            return ClassifiedCall(
+                kind: .secret,
+                key: cacheKey(arguments),
+                subcommand: candidate,
+                subject: subject(arguments, verbCount: candidate.split(separator: " ").count)
+            )
         }
         for candidate in prefixes(of: verbs) where metadataCommands.contains(candidate) {
-            return ClassifiedCall(kind: .metadata, key: cacheKey(arguments), subcommand: candidate)
+            return ClassifiedCall(
+                kind: .metadata,
+                key: cacheKey(arguments),
+                subcommand: candidate,
+                subject: subject(arguments, verbCount: candidate.split(separator: " ").count)
+            )
         }
 
         return ClassifiedCall(kind: .passthrough, key: nil, subcommand: subcommand)
@@ -139,6 +156,45 @@ public enum ProxyClassifier {
             "--cache-key", "--config", "--iso-timestamps", "--encoding",
             "--out-file", "--file-mode", "--categories", "--tags", "--include-archive",
         ].contains(flag)
+    }
+
+    /// The operand the call names, after dropping its subcommand verbs: the
+    /// `op://` reference for `read`, the item name or ID for `item get`.
+    /// A `--vault` is folded in so two items of the same name stay apart.
+    /// Returns nil for a call that names nothing, such as `op vault list`.
+    static func subject(_ arguments: [String], verbCount: Int) -> String? {
+        var operands: [String] = []
+        var vault: String?
+        var index = 0
+        while index < arguments.count {
+            let argument = arguments[index]
+            if argument.hasPrefix("-") {
+                if let value = inlineValue(of: argument, named: "--vault") {
+                    vault = value
+                } else if argument == "--vault", index + 1 < arguments.count {
+                    vault = arguments[index + 1]
+                }
+                if !argument.contains("="), index + 1 < arguments.count, flagTakesValue(argument) {
+                    index += 1
+                }
+                index += 1
+                continue
+            }
+            operands.append(argument)
+            index += 1
+        }
+
+        guard operands.count > verbCount else { return nil }
+        let operand = operands[verbCount]
+        if operand.hasPrefix("op://") { return operand }
+        guard let vault else { return operand }
+        return "\(vault)/\(operand)"
+    }
+
+    private static func inlineValue(of argument: String, named flag: String) -> String? {
+        let prefix = flag + "="
+        guard argument.hasPrefix(prefix) else { return nil }
+        return String(argument.dropFirst(prefix.count))
     }
 
     private static func prefixes(of verbs: [String]) -> [String] {

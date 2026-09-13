@@ -72,3 +72,23 @@ import Testing
     #expect(ProxyClassifier.classify(["signin"]).key == nil)
     #expect(ProxyClassifier.classify(["item", "create"]).key == nil)
 }
+
+@Test func namesWhatTheCallAsksFor() {
+    #expect(ProxyClassifier.classify(["read", "op://Employee/pat/credential"]).subject
+        == "op://Employee/pat/credential")
+    #expect(ProxyClassifier.classify(["item", "get", "GitHub", "--fields", "credential"]).subject
+        == "GitHub")
+    // The vault disambiguates two items that share a name.
+    #expect(ProxyClassifier.classify(["item", "get", "GitHub", "--vault", "Employee"]).subject
+        == "Employee/GitHub")
+    #expect(ProxyClassifier.classify(["item", "get", "--vault=Employee", "GitHub"]).subject
+        == "Employee/GitHub")
+    // A flag value is never mistaken for the operand.
+    #expect(ProxyClassifier.classify(["read", "--account", "everlast", "op://E/i/f"]).subject
+        == "op://E/i/f")
+    // A call that names nothing has no subject.
+    #expect(ProxyClassifier.classify(["vault", "list"]).subject == nil)
+    #expect(ProxyClassifier.classify(["whoami"]).subject == nil)
+    // Never cached, never named.
+    #expect(ProxyClassifier.classify(["item", "get", "GitHub", "--otp"]).subject == nil)
+}

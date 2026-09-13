@@ -1,0 +1,195 @@
+#!/usr/bin/env python3
+"""Tests for op-cache-notify, run against synthetic audit logs.
+
+Each case states what must be notified AND what must stay silent: a watcher
+that only ever fires is as useless as one that never does, and neither shows up
+in a run that checks a single direction.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import sys
+import tempfile
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+TOOL = Path(__file__).resolve().parents[1] / "op-cache-notify"
+NOW = datetime.now(timezone.utc)
+
+failures: list[str] = []
+
+
+def entry(minutes_ago: float, subject: str | None = None, kind: str = "secret") -> str:
+    stamp = (NOW - timedelta(minutes=minutes_ago)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    secrets = [{"name": "read", "reference": subject}] if subject else []
+    return json.dumps(
+        {
+            "timestamp": stamp,
+            "event": "proxy",
+            "profile": "_proxy",
+            "account": "",
+            "secrets": secrets,
+            "subcommand": "read",
+            "cacheKind": kind,
+            "cacheHit": True,
+            "caller": {"pid": 1, "path": "/bin/zsh"},
+        }
+    )
+
+
+def run(lines: list[str], state: Path, config: dict | None = None, log: Path | None = None):
+    directory = state.parent
+    log = log or directory / "audit.jsonl"
+    log.write_text("\n".join(lines) + ("\n" if lines else ""))
+    environment = dict(os.environ)
+    environment["OP_CACHE_AUDIT_LOG"] = str(log)
+    environment["OP_CACHE_NOTIFY_STATE"] = str(state)
+    if config is not None:
+        config_path = directory / "notify.json"
+        config_path.write_text(json.dumps(config))
+        environment["OP_CACHE_NOTIFY_CONFIG"] = str(config_path)
+    else:
+        environment["OP_CACHE_NOTIFY_CONFIG"] = str(directory / "absent.json")
+    result = subprocess.run(
+        [sys.executable, str(TOOL), "--dry-run"],
+        capture_output=True,
+        text=True,
+        env=environment,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise AssertionError(f"exit {result.returncode}: {result.stderr}")
+    return [line for line in result.stdout.splitlines() if line.startswith("NOTIFY")]
+
+
+def check(name: str, condition: bool, detail: str = "") -> None:
+    if condition:
+        print(f"ok   {name}")
+    else:
+        print(f"FAIL {name} {detail}")
+        failures.append(name)
+
+
+def case(name: str):
+    directory = Path(tempfile.mkdtemp())
+    return name, directory / "state.json"
+
+
+# 1. A reference never seen before is named; one fetched all week is not.
+name, state = case("rare is named, routine is silent")
+history = [entry(60 * 24 * d, "op://Employee/routine/credential") for d in range(1, 6)]
+notifications = run(history + [entry(1, "op://Employee/routine/credential")], state)
+check("routine reference stays silent", notifications == [], str(notifications))
+
+name, state = case("first fetch")
+notifications = run([entry(1, "op://Employee/fremd/credential")], state)
+check(
+    "first-ever fetch is named",
+    len(notifications) == 1 and "op://Employee/fremd/credential" in notifications[0],
+    str(notifications),
+)
+
+# 2. The threshold counts the week before the fetch: two prior fetches still
+#    notify, three do not.
+name, state = case("two before")
+history = [entry(600, "op://E/x/c"), entry(500, "op://E/x/c")]
+check(
+    "two prior fetches still notify",
+    len(run(history + [entry(1, "op://E/x/c")], state)) == 1,
+)
+
+name, state = case("three before")
+history = [entry(600, "op://E/x/c"), entry(500, "op://E/x/c"), entry(400, "op://E/x/c")]
+check(
+    "three prior fetches stay silent",
+    run(history + [entry(1, "op://E/x/c")], state) == [],
+)
+
+# 3. Fetches older than the window do not count as routine.
+name, state = case("outside the window")
+history = [entry(60 * 24 * 9, "op://E/alt/c") for _ in range(5)]
+check(
+    "fetches older than a week do not count",
+    len(run(history + [entry(1, "op://E/alt/c")], state)) == 1,
+)
+
+# 4. Listings carry no credential and are never named.
+name, state = case("metadata")
+check(
+    "metadata calls are never named",
+    run([entry(1, "Employee/SomeItem", kind="metadata")], state) == [],
+)
+
+# 5. The burst check counts every request, cached or not.
+name, state = case("burst")
+lines = [entry(30, f"op://E/i{i}/c") for i in range(60)]
+notifications = run(lines, state, config={"rare_threshold": 0, "rate_threshold": 50})
+check(
+    "a burst above the threshold warns",
+    any("Stunde" in line for line in notifications),
+    str(notifications),
+)
+
+name, state = case("below burst")
+lines = [entry(30, f"op://E/i{i}/c") for i in range(40)]
+notifications = run(lines, state, config={"rare_threshold": 0, "rate_threshold": 50})
+check("below the threshold stays silent", notifications == [], str(notifications))
+
+name, state = case("old burst")
+lines = [entry(120, f"op://E/i{i}/c") for i in range(60)]
+notifications = run(lines, state, config={"rare_threshold": 0, "rate_threshold": 50})
+check("a burst an hour ago no longer warns", notifications == [], str(notifications))
+
+# 6. The burst warning does not repeat inside its cooldown.
+name, state = case("cooldown")
+lines = [entry(30, f"op://E/i{i}/c") for i in range(60)]
+config = {"rare_threshold": 0, "rate_threshold": 50, "rate_cooldown_minutes": 60}
+first = run(lines, state, config=config)
+second = run(lines + [entry(0.5, "op://E/i0/c")], state, config=config)
+check("burst warns once", len(first) == 1, str(first))
+check("burst does not repeat in the cooldown", second == [], str(second))
+
+# 7. Entries already seen are not re-notified.
+name, state = case("offset")
+lines = [entry(5, "op://E/einmal/c")]
+first = run(lines, state)
+second = run(lines, state)
+check("a fetch is named once", len(first) == 1 and second == [], f"{first} then {second}")
+
+# 8. A truncated log is read from the front instead of skipped.
+name, state = case("truncation")
+run([entry(5, f"op://E/i{i}/c") for i in range(3)], state)
+after = run([entry(4, "op://E/neu/c")], state)
+check("a shrunken log is not skipped", len(after) == 1, str(after))
+
+# 9. A missing log is not an error.
+name, state = case("missing log")
+missing = state.parent / "nothing.jsonl"
+environment = dict(os.environ)
+environment.update(
+    {
+        "OP_CACHE_AUDIT_LOG": str(missing),
+        "OP_CACHE_NOTIFY_STATE": str(state),
+        "OP_CACHE_NOTIFY_CONFIG": str(state.parent / "absent.json"),
+    }
+)
+result = subprocess.run(
+    [sys.executable, str(TOOL), "--dry-run"], capture_output=True, text=True, env=environment
+)
+check("a missing log exits clean", result.returncode == 0 and result.stdout == "")
+
+# 10. Disabled means silent.
+name, state = case("disabled")
+check(
+    "enabled:false silences everything",
+    run([entry(1, "op://E/x/c")], state, config={"enabled": False}) == [],
+)
+
+print()
+if failures:
+    print(f"{len(failures)} failed: {', '.join(failures)}")
+    sys.exit(1)
+print("all passed")
