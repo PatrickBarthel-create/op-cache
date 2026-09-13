@@ -26,12 +26,11 @@ END_HOUR="${OP_CACHE_WARM_END:-23}"
 # Longer than a full prefetch takes (measured: about two and a half minutes for
 # 1,100 items), short enough that an hourly timer recovers by itself.
 STALE_LOCK_SECONDS="${OP_CACHE_WARM_STALE_LOCK:-1800}"
-# Vaults across both accounts (13 + 4, measured 13.09.2026). Fewer than this
-# means one account did not warm.
-MIN_VAULTS="${OP_CACHE_WARM_MIN_VAULTS:-17}"
 # A partial warm-up is retried no more often than this (6h).
 PARTIAL_RETRY_SECONDS="${OP_CACHE_WARM_PARTIAL_RETRY:-21600}"
 RETRY_STAMP="$STATE_DIR/op-cache-warm.last-attempt"
+PARTIAL_MARK="$STATE_DIR/op-cache-warm.partial"
+UNLOCK_OUT="$STATE_DIR/op-cache-warm.unlock-output"
 
 log() { print -r -- "$(date '+%Y-%m-%d %H:%M:%S') $*"; }
 
@@ -100,26 +99,27 @@ if (( rc != 0 )) || [[ -z "$unlocked" ]]; then
 fi
 
 # Coverage, not presence. One account can time out on its approval while the
-# other warms, and "at least one vault" would then never repair it - measured
-# on 13.09.2026: 13 vaults warm, the second account's 4 skipped, and nothing
-# would have noticed. The expected count is the measured total of both
-# accounts; a lower number is a partial warm-up and gets redone.
-if (( unlocked >= MIN_VAULTS )); then
-    log "cache warm ($unlocked vaults), nothing to do"
-    exit 0
-fi
-
+# others warm, and "at least one vault" would then never repair it - measured
+# on 13.09.2026: two accounts warm, the third skipped, and nothing would have
+# noticed. The unlock itself says which accounts it skipped; that line is kept
+# as a marker, and a marked warm-up is redone after the retry interval. A
+# vault count would not do: empty vaults do not count as unlocked, so the
+# number moves with the vaults' contents.
 if (( unlocked > 0 )); then
-    # A partial warm-up means one account did not approve. Retrying every hour
-    # would turn a vault that simply went away into an hourly dialog, so a
+    if [[ ! -f "$PARTIAL_MARK" ]]; then
+        log "cache warm ($unlocked vaults), nothing to do"
+        exit 0
+    fi
+    # A partial warm-up means an account did not approve. Retrying every hour
+    # would turn a persistently absent approval into an hourly dialog, so a
     # retry waits; a fully cold cache is always worth the attempt.
     last=$(cat "$RETRY_STAMP" 2>/dev/null)
     since=$(( $(date +%s) - ${last:-0} ))
     if (( since < PARTIAL_RETRY_SECONDS )); then
-        log "cache partly warm ($unlocked of $MIN_VAULTS vaults), last attempt ${since}s ago, waiting"
+        log "cache partly warm ($unlocked vaults; $(cat "$PARTIAL_MARK")), last attempt ${since}s ago, waiting"
         exit 0
     fi
-    log "cache partly warm ($unlocked of $MIN_VAULTS vaults), running unlock --all --ttl $TTL"
+    log "cache partly warm ($unlocked vaults; $(cat "$PARTIAL_MARK")), running unlock --all --ttl $TTL"
     # Only a retry of a partial warm-up starts the wait. A cold run that ends
     # short (a write to 1Password wiped the vaults it had already prefetched)
     # gets one prompt retry on the next tick before the six hours apply.
@@ -132,22 +132,26 @@ fi
 # The unlock runs as a child whose pid is what the lock names: when this
 # script is killed, the lock must still say who is actually holding the
 # dialog open, and a TERM here ends the child rather than orphaning it.
-"$OP_CACHE" unlock --all --ttl "$TTL" &
+"$OP_CACHE" unlock --all --ttl "$TTL" > "$UNLOCK_OUT" 2>&1 &
 child=$!
 print -r -- "$child" > "$LOCK/pid"
 trap 'kill -TERM "$child" 2>/dev/null; rm -f "$LOCK/pid"; rmdir "$LOCK" 2>/dev/null' EXIT INT TERM
 if wait "$child"; then
-    after=$("$OP_CACHE" status _items | head -1)
-    log "warm: $after"
-    now_unlocked=$(print -r -- "$after" | sed -n 's/^prefetched vaults: \([0-9][0-9]*\) unlocked.*/\1/p')
-    # Still short after a full unlock: either an account did not approve, or a
-    # vault is gone and the expected count is stale. Both deserve a line,
-    # because the alternative is a silent retry every six hours for ever.
-    if [[ -n "$now_unlocked" ]] && (( now_unlocked < MIN_VAULTS )); then
-        log "still $now_unlocked of $MIN_VAULTS vaults after a full unlock: an account skipped, or OP_CACHE_WARM_MIN_VAULTS is stale"
+    cat "$UNLOCK_OUT"
+    log "warm: $("$OP_CACHE" status _items | head -1)"
+    # The unlock names every account it skipped. Keep that as the marker for
+    # the next tick; without it a skipped account would never be retried, and
+    # with a silent retry nobody would learn that it keeps being skipped.
+    skipped=$(grep -o 'skipped [^:]*' "$UNLOCK_OUT" | sort -u | tr '\n' ' ')
+    if [[ -n "$skipped" ]]; then
+        print -r -- "$skipped" > "$PARTIAL_MARK"
+        log "partial: $skipped- will retry in $((PARTIAL_RETRY_SECONDS / 3600))h"
+    else
+        rm -f "$PARTIAL_MARK" "$RETRY_STAMP"
     fi
 else
     code=$?
+    cat "$UNLOCK_OUT"
     log "unlock failed with exit $code"
     exit $code
 fi

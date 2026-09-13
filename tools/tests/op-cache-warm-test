@@ -54,13 +54,24 @@ cold=$(stub cold 0 'prefetched vaults: 0 unlocked, 0 expired')
 out=$(run "$cold" OP_CACHE_WARM_START=0 OP_CACHE_WARM_END=24)
 check "cold cache runs unlock" $([[ "$out" == *"cache cold, running unlock"* ]] && print 1 || print 0) "$out"
 
-# 2b. A partial warm-up (one account skipped) is redone, not accepted.
-partial=$(stub partial 0 'prefetched vaults: 13 unlocked, 0 expired')
-rm -f "$WORK/tmp/op-cache-warm.last-attempt"
+# 2b. A warm-up that skipped an account leaves a marker and is redone; a
+#     warm cache without a marker is left alone, whatever its vault count.
+partial=$(stub partial 0 'prefetched vaults: 8 unlocked, 0 expired
+  skipped strategie-fm.1password.eu: [ERROR] authorization timeout
+Unlocked 945 item(s) from 14 vault(s) in 2 account(s)')
+rm -f "$WORK/tmp/op-cache-warm.last-attempt" "$WORK/tmp/op-cache-warm.partial"
+out=$(run "$cold" OP_CACHE_WARM_START=0 OP_CACHE_WARM_END=24)
+check "a full unlock leaves no marker" $([[ ! -f "$WORK/tmp/op-cache-warm.partial" ]] && print 1 || print 0)
 out=$(run "$partial" OP_CACHE_WARM_START=0 OP_CACHE_WARM_END=24)
-check "partly warm cache is redone" $([[ "$out" == *"partly warm (13 of 17"* && "$out" == *"running unlock"* ]] && print 1 || print 0) "$out"
-out=$(run "$partial" OP_CACHE_WARM_START=0 OP_CACHE_WARM_END=24 OP_CACHE_WARM_MIN_VAULTS=13)
-check "expected vault count is configurable" $([[ "$out" == *"nothing to do"* ]] && print 1 || print 0) "$out"
+check "a warm cache without a marker is left alone" $([[ "$out" == *"nothing to do"* ]] && print 1 || print 0) "$out"
+# Cold run against the skipping stub: the unlock reports the skipped account.
+rm -f "$WORK/tmp/op-cache-warm.partial"
+coldskip=$(stub coldskip 0 'prefetched vaults: 0 unlocked, 0 expired
+  skipped strategie-fm.1password.eu: [ERROR] authorization timeout')
+out=$(run "$coldskip" OP_CACHE_WARM_START=0 OP_CACHE_WARM_END=24)
+check "a skipped account is logged and marked" $([[ "$out" == *"partial: skipped strategie-fm.1password.eu"* && -f "$WORK/tmp/op-cache-warm.partial" ]] && print 1 || print 0) "$out"
+out=$(run "$partial" OP_CACHE_WARM_START=0 OP_CACHE_WARM_END=24)
+check "a marked warm cache is redone" $([[ "$out" == *"partly warm (8 vaults; skipped strategie-fm"* && "$out" == *"running unlock"* ]] && print 1 || print 0) "$out"
 
 # 3. An unreadable status must NOT be read as cold: that would prompt.
 broken=$(stub broken 1 'irgendein Fehler')
@@ -74,8 +85,10 @@ out=$(run "$reworded" OP_CACHE_WARM_START=0 OP_CACHE_WARM_END=24)
 check "reworded status does not unlock" $([[ "$out" == *"status unreadable"* ]] && print 1 || print 0) "$out"
 
 # 4. Outside working hours nothing happens, whatever the cache says.
-out=$(run "$cold" OP_CACHE_WARM_START=23 OP_CACHE_WARM_END=24)
-check "outside hours skips" $([[ "$out" == *"outside 23-24h"* && "$out" != *"unlock"* ]] && print 1 || print 0) "$out"
+# An empty window at the current hour excludes it whatever the clock says.
+now_hour=$(date +%-H)
+out=$(run "$cold" OP_CACHE_WARM_START=$now_hour OP_CACHE_WARM_END=$now_hour)
+check "outside hours skips" $([[ "$out" == *"outside ${now_hour}-${now_hour}h"* && "$out" != *"unlock"* ]] && print 1 || print 0) "$out"
 
 # 5. A missing op-cache is an error, not a silent pass.
 out=$(env OP_CACHE_WARM_SCREEN_LOCKED_CMD=false OP_CACHE_BIN=/gibts/nicht OP_CACHE_WARM_STATE_DIR="$WORK/tmp" "$TOOL" 2>&1)
@@ -105,12 +118,14 @@ check "lock is released afterwards" $([[ ! -d "$WORK/tmp/op-cache-warm.lock" ]] 
 
 # 7. A partial warm-up is retried only after the retry interval; a cold cache always.
 rm -f "$WORK/tmp/op-cache-warm.last-attempt"
+print -r -- "skipped strategie-fm.1password.eu " > "$WORK/tmp/op-cache-warm.partial"
 out=$(run "$partial" OP_CACHE_WARM_START=0 OP_CACHE_WARM_END=24)
 check "first partial retry runs" $([[ "$out" == *"running unlock"* ]] && print 1 || print 0) "$out"
 out=$(run "$partial" OP_CACHE_WARM_START=0 OP_CACHE_WARM_END=24)
 check "second partial retry within the interval waits" $([[ "$out" == *"last attempt"* && "$out" != *"running unlock"* ]] && print 1 || print 0) "$out"
-out=$(run "$cold" OP_CACHE_WARM_START=0 OP_CACHE_WARM_END=24)
+out=$(run "$coldskip" OP_CACHE_WARM_START=0 OP_CACHE_WARM_END=24)
 check "a cold cache ignores the retry interval" $([[ "$out" == *"running unlock"* ]] && print 1 || print 0) "$out"
+date +%s > "$WORK/tmp/op-cache-warm.last-attempt"
 out=$(run "$partial" OP_CACHE_WARM_START=0 OP_CACHE_WARM_END=24 OP_CACHE_WARM_PARTIAL_RETRY=0)
 check "retry interval is configurable" $([[ "$out" == *"running unlock"* ]] && print 1 || print 0) "$out"
 
@@ -131,20 +146,18 @@ sleep 1
 check "TERM to the script ends the child" $(kill -0 "$holder" 2>/dev/null && print 0 || print 1) "holder=$holder"
 check "lock is gone after TERM" $([[ ! -d "$WORK/tmp/op-cache-warm.lock" ]] && print 1 || print 0)
 
-# 7b. A cold run that ends short is retried on the next tick; only a partial
-#     retry starts the six-hour wait.
-rm -f "$WORK/tmp/op-cache-warm.last-attempt"
-out=$(run "$cold" OP_CACHE_WARM_START=0 OP_CACHE_WARM_END=24)
+# 7b. A cold run that ends with a skipped account is retried on the next
+#     tick; only a partial retry starts the six-hour wait.
+rm -f "$WORK/tmp/op-cache-warm.last-attempt" "$WORK/tmp/op-cache-warm.partial"
+out=$(run "$coldskip" OP_CACHE_WARM_START=0 OP_CACHE_WARM_END=24)
 out=$(run "$partial" OP_CACHE_WARM_START=0 OP_CACHE_WARM_END=24)
 check "partial after a cold run retries at once" $([[ "$out" == *"running unlock"* ]] && print 1 || print 0) "$out"
 out=$(run "$partial" OP_CACHE_WARM_START=0 OP_CACHE_WARM_END=24)
 check "partial after a partial waits" $([[ "$out" == *"last attempt"* ]] && print 1 || print 0) "$out"
 
-# 8b. A full unlock that still falls short says so, instead of retrying in silence.
-short=$(stub short 0 'prefetched vaults: 13 unlocked, 0 expired')
-rm -f "$WORK/tmp/op-cache-warm.last-attempt"
-out=$(run "$short" OP_CACHE_WARM_START=0 OP_CACHE_WARM_END=24)
-check "a short result after unlock is logged" $([[ "$out" == *"still 13 of 17 vaults after a full unlock"* ]] && print 1 || print 0) "$out"
+# 8b. A retry that finally covers every account clears the marker.
+out=$(run "$cold" OP_CACHE_WARM_START=0 OP_CACHE_WARM_END=24)
+check "a complete unlock clears the marker" $([[ ! -f "$WORK/tmp/op-cache-warm.partial" && ! -f "$WORK/tmp/op-cache-warm.last-attempt" ]] && print 1 || print 0) "$out"
 
 # 9. A locked screen skips, whatever the cache says.
 out=$(env OP_CACHE_WARM_SCREEN_LOCKED_CMD=true OP_CACHE_BIN="$cold" OP_CACHE_WARM_STATE_DIR="$WORK/tmp" OP_CACHE_WARM_START=0 OP_CACHE_WARM_END=24 "$TOOL" 2>&1)
